@@ -45,4 +45,4 @@ pub type DecoderFactory = fn(params: &CodecParameters) -> Result<Box<dyn Decoder
 /// Factory that builds an encoder for a given codec parameter set.
 pub type EncoderFactory = fn(params: &CodecParameters) -> Result<Box<dyn Encoder>>;
 
-pub use registry::CodecRegistry;
+pub use registry::{CodecImplementation, CodecRegistry};

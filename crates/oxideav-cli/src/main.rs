@@ -105,28 +105,36 @@ fn cmd_list(reg: &Registries) -> oxideav::core::Result<()> {
         println!("  {c}");
     }
 
-    let mut dec: Vec<_> = reg
+    println!();
+    println!("Codecs:");
+    println!(" D..... = Decoding supported");
+    println!(" .E.... = Encoding supported");
+    println!(" ..V... = Video codec");
+    println!(" ..A... = Audio codec");
+    println!(" ..S... = Subtitle codec");
+    println!(" ..D... = Data codec");
+    println!(" ..T... = Attachment codec");
+    println!(" ...I.. = Intra frame-only codec");
+    println!(" ....L. = Lossy compression");
+    println!(" .....S = Lossless compression");
+    println!(" ------");
+    let mut rows: Vec<(String, String, String, bool)> = reg
         .codecs
-        .decoder_ids()
-        .map(|c| c.as_str().to_owned())
+        .all_implementations()
+        .map(|(id, im)| {
+            (
+                im.caps.flag_string(),
+                id.as_str().to_owned(),
+                im.caps.implementation.clone(),
+                im.caps.hardware_accelerated,
+            )
+        })
         .collect();
-    dec.sort_unstable();
-    println!("Decoders:");
-    for c in &dec {
-        println!("  {c}");
+    rows.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
+    for (flags, id, implementation, hw) in rows {
+        let hw_tag = if hw { "  [HW]" } else { "" };
+        println!("  {flags}  {id:<14}  ({implementation}){hw_tag}");
     }
-
-    let mut enc: Vec<_> = reg
-        .codecs
-        .encoder_ids()
-        .map(|c| c.as_str().to_owned())
-        .collect();
-    enc.sort_unstable();
-    println!("Encoders:");
-    for c in &enc {
-        println!("  {c}");
-    }
-
     Ok(())
 }
 

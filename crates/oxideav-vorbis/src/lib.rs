@@ -21,25 +21,23 @@ pub mod imdct;
 pub mod residue;
 pub mod setup;
 
-use oxideav_codec::{CodecRegistry, Decoder, Encoder};
-use oxideav_core::{CodecId, CodecParameters, Error, Result};
+use oxideav_codec::{CodecRegistry, Decoder};
+use oxideav_core::{CodecCapabilities, CodecId, CodecParameters, Result};
 
 pub const CODEC_ID_STR: &str = "vorbis";
 
 pub fn register(reg: &mut CodecRegistry) {
     let cid = CodecId::new(CODEC_ID_STR);
-    reg.register_decoder(cid.clone(), make_decoder);
-    reg.register_encoder(cid, make_encoder);
+    let caps = CodecCapabilities::audio("vorbis_sw")
+        .with_lossy(true)
+        .with_max_channels(255);
+    // Decoder is in active development — register it so probing through the
+    // pipeline works; init may still error on unsupported config.
+    reg.register_decoder_impl(cid, caps, make_decoder);
 }
 
 fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     decoder::make_decoder(params)
-}
-
-fn make_encoder(_params: &CodecParameters) -> Result<Box<dyn Encoder>> {
-    Err(Error::unsupported(
-        "Vorbis encoder not yet implemented in pure Rust",
-    ))
 }
 
 pub use identification::{parse_identification_header, Identification};

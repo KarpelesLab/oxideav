@@ -14,15 +14,17 @@
 
 use oxideav_codec::{CodecRegistry, Decoder, Encoder};
 use oxideav_core::{
-    AudioFrame, CodecId, CodecParameters, Error, Frame, MediaType, Packet, Result, SampleFormat,
-    TimeBase,
+    AudioFrame, CodecCapabilities, CodecId, CodecParameters, Error, Frame, MediaType, Packet,
+    Result, SampleFormat, TimeBase,
 };
 
 pub fn register(reg: &mut CodecRegistry) {
     for id in CODEC_IDS {
         let cid = CodecId::new(*id);
-        reg.register_decoder(cid.clone(), make_decoder);
-        reg.register_encoder(cid, make_encoder);
+        let caps = CodecCapabilities::audio(format!("{id}_sw"))
+            .with_lossless(true)
+            .with_intra_only(true);
+        reg.register_both(cid, caps, make_decoder, make_encoder);
     }
 }
 

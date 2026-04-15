@@ -1,12 +1,16 @@
-//! FLAC codec registration. Decoder is forthcoming.
+//! FLAC codec registration.
 
 use oxideav_codec::{CodecRegistry, Decoder, Encoder};
-use oxideav_core::{CodecId, CodecParameters, Result};
+use oxideav_core::{CodecCapabilities, CodecId, CodecParameters, Result};
 
 pub fn register(reg: &mut CodecRegistry) {
     let cid = CodecId::new(super::CODEC_ID_STR);
-    reg.register_decoder(cid.clone(), make_decoder);
-    reg.register_encoder(cid, make_encoder);
+    let caps = CodecCapabilities::audio("flac_sw")
+        .with_lossless(true)
+        .with_intra_only(true)
+        .with_max_channels(8)
+        .with_max_sample_rate(655_350);
+    reg.register_both(cid, caps, make_decoder, make_encoder);
 }
 
 fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
