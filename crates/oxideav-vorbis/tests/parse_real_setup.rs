@@ -6,7 +6,10 @@
 //! ffmpeg/libvorbis for a 1-second 1ch 48 kHz sine wave at low quality
 //! (sine.ogg → A_VORBIS in MKV). Captured 2026-04-15 from the test rig.
 
+use oxideav_vorbis::bitreader::BitReader;
+use oxideav_vorbis::floor::decode_floor_packet;
 use oxideav_vorbis::identification::parse_identification_header;
+use oxideav_vorbis::residue::decode_residue;
 use oxideav_vorbis::setup::parse_setup;
 
 /// Split a Xiph-laced extradata blob (count_byte=N-1, then N-1 lacing groups,
@@ -153,4 +156,66 @@ fn parses_real_setup_from_disk() {
         id.audio_channels as usize,
         "one floor decoded per channel"
     );
+
+    // Drive the residue decoder too. Per Vorbis I §8.6.3, hitting end-of-
+    // packet mid-residue is legal and the decoder must terminate gracefully
+    // (regression for a bug where we errored out when the classbook read
+    // ran out of bits on short blocks of sine.ogg).
+    let blocksize = partial.blocksize as usize;
+    let n_half = blocksize / 2;
+    let n_channels = id.audio_channels as usize;
+    let mode = &setup.modes[partial.mode_index as usize];
+    let mapping = &setup.mappings[mode.mapping as usize];
+    let mut br = BitReader::new(&audio_pkt);
+    let _ = br.read_bit().unwrap();
+    let mode_bits = if setup.modes.len() <= 1 {
+        0
+    } else {
+        32 - (setup.modes.len() as u32 - 1).leading_zeros()
+    };
+    let _ = br.read_u32(mode_bits).unwrap();
+    if mode.blockflag {
+        let _ = br.read_bit().unwrap();
+        let _ = br.read_bit().unwrap();
+    }
+    let mut no_residue = vec![false; n_channels];
+    for (ch, nr) in no_residue.iter_mut().enumerate() {
+        let submap = if mapping.submaps > 1 {
+            mapping.mux[ch]
+        } else {
+            0
+        };
+        let floor_idx = mapping.submap_floor[submap as usize] as usize;
+        let floor = &setup.floors[floor_idx];
+        let dec = decode_floor_packet(floor, &setup.codebooks, &mut br).unwrap();
+        *nr = dec.unused;
+    }
+    for sm in 0..mapping.submaps as usize {
+        let ch_list: Vec<usize> = (0..n_channels)
+            .filter(|&ch| {
+                let smi = if mapping.submaps > 1 {
+                    mapping.mux[ch] as usize
+                } else {
+                    0
+                };
+                smi == sm
+            })
+            .collect();
+        if ch_list.is_empty() {
+            continue;
+        }
+        let res_idx = mapping.submap_residue[sm] as usize;
+        let residue = &setup.residues[res_idx];
+        let mut sub_vectors: Vec<Vec<f32>> = ch_list.iter().map(|_| vec![0f32; n_half]).collect();
+        let dnd: Vec<bool> = ch_list.iter().map(|&ch| no_residue[ch]).collect();
+        decode_residue(
+            residue,
+            &setup.codebooks,
+            n_half,
+            &dnd,
+            &mut sub_vectors,
+            &mut br,
+        )
+        .expect("residue decode must tolerate end-of-packet");
+    }
 }

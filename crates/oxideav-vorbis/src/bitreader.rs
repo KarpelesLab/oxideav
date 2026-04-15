@@ -55,7 +55,7 @@ impl<'a> BitReader<'a> {
         if self.bits_in_acc < n {
             self.refill();
             if self.bits_in_acc < n {
-                return Err(Error::invalid("Vorbis BitReader: out of bits"));
+                return Err(Error::Eof);
             }
         }
         let mask = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };

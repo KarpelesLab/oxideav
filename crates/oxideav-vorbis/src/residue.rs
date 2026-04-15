@@ -125,12 +125,19 @@ fn decode_partitioned(
     let mut classifications_table: Vec<Vec<u32>> = vec![vec![0; n_partitions]; n_channels];
 
     // Vorbis cascades 8 passes; on pass 0 we also fetch the per-partition class.
-    for pass in 0..8u32 {
+    // Per Vorbis I §8.6.3, hitting end-of-packet mid-decode is NOT an error —
+    // remaining partitions/passes stay zero-filled. We use `Error::Eof` from
+    // the bit reader as the EOP signal.
+    'cascade: for pass in 0..8u32 {
         let mut partition_idx = 0usize;
         while partition_idx < n_partitions {
             if pass == 0 {
                 for ch in 0..n_channels {
-                    let class_id = classbook.decode_scalar(br)?;
+                    let class_id = match classbook.decode_scalar(br) {
+                        Ok(v) => v,
+                        Err(Error::Eof) => break 'cascade,
+                        Err(e) => return Err(e),
+                    };
                     if trace {
                         eprintln!(
                             "[vorbis] part_idx={} ch={} class_id={} bitpos={}",
@@ -190,7 +197,11 @@ fn decode_partitioned(
                     }
                     let mut bin = bin_start;
                     while bin < bin_end {
-                        let entry = book.decode_scalar(br)?;
+                        let entry = match book.decode_scalar(br) {
+                            Ok(v) => v,
+                            Err(Error::Eof) => break 'cascade,
+                            Err(e) => return Err(e),
+                        };
                         let vq = book.vq_lookup(entry)?;
                         for j in 0..dim {
                             if bin + j < bin_end && bin + j < vectors[ch].len() {
