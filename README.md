@@ -31,11 +31,11 @@ oxideav/
 │   ├── oxideav-ogg/          # Ogg container (RFC 3533): pages, packets, CRC32.
 │   │                         #   Codec-agnostic transport layer.
 │   ├── oxideav-vorbis/       # Vorbis audio codec (currently: id parser; decoder TBD)
-│   ├── oxideav-flac/         # FLAC native container + codec id
-│   │                         #   (decoder TBD — see roadmap)
+│   ├── oxideav-flac/         # FLAC native container + decoder + encoder
+│   ├── oxideav-opus/         # Opus codec (header parsing; decoder TBD)
+│   ├── oxideav-mkv/          # Matroska / WebM container (EBML), demux + mux
 │   ├── oxideav-<format>/     # one crate per future complex format:
-│   │                         #   oxideav-mkv, oxideav-mp4, oxideav-h264,
-│   │                         #   oxideav-opus, oxideav-av1, …
+│   │                         #   oxideav-mp4, oxideav-h264, oxideav-av1, …
 │   │
 │   ├── oxideav/              # aggregator: re-exports + feature-gated registry.
 │   │                         # Depend on this crate to get access to all codecs
@@ -81,12 +81,19 @@ mono, 16-bit stereo with channel decorrelation, and 24-bit stereo (decoded
 audio MD5 matches both ffmpeg and the original PCM the FLACs were encoded
 from).
 
-| Format        | Container              | Codec                | Probe | Remux | Decode | Encode |
-|---------------|------------------------|----------------------|:-----:|:-----:|:------:|:------:|
-| PCM in WAV    | `oxideav-basic` (wav)  | `oxideav-basic` (pcm)|  ✅   |  ✅   |   ✅   |   ✅   |
-| FLAC native   | `oxideav-flac`         | `oxideav-flac`       |  ✅   |  ✅   |   ✅   |   ✅   |
-| Ogg Vorbis    | `oxideav-ogg`          | `oxideav-vorbis`     |  ✅   |  ✅   |        |        |
-| Ogg Opus      | `oxideav-ogg`          | `oxideav-opus`       |  ✅   |  ✅   |        |        |
+| Format        | Container                 | Codec                | Probe | Remux | Decode | Encode |
+|---------------|---------------------------|----------------------|:-----:|:-----:|:------:|:------:|
+| PCM in WAV    | `oxideav-basic` (wav)     | `oxideav-basic` (pcm)|  ✅   |  ✅   |   ✅   |   ✅   |
+| FLAC native   | `oxideav-flac`            | `oxideav-flac`       |  ✅   |  ✅   |   ✅   |   ✅   |
+| Ogg Vorbis    | `oxideav-ogg`             | `oxideav-vorbis`     |  ✅   |  ✅   |        |        |
+| Ogg Opus      | `oxideav-ogg`             | `oxideav-opus`       |  ✅   |  ✅   |        |        |
+| Matroska      | `oxideav-mkv` (FLAC/Opus/Vorbis/PCM) | (via codec crate) |  ✅   |  ✅   |   ✅\*  |        |
+
+\* When combined with a codec whose decoder is implemented (FLAC today).
+
+Cross-container remux works: FLAC ↔ MKV and Ogg ↔ MKV with decoded-audio
+MD5 preserved for FLAC and Vorbis; Opus→MKV produces a playable stream with
+a minor end-trim discrepancy still being tracked.
 
 CLI verbs: `list`, `probe`, `remux`, `transcode`. Example:
 

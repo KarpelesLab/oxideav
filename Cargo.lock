@@ -125,6 +125,7 @@ dependencies = [
  "oxideav-container",
  "oxideav-core",
  "oxideav-flac",
+ "oxideav-mkv",
  "oxideav-ogg",
  "oxideav-opus",
  "oxideav-pipeline",
@@ -171,6 +172,15 @@ dependencies = [
 
 [[package]]
 name = "oxideav-flac"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mkv"
 version = "0.0.1"
 dependencies = [
  "oxideav-codec",

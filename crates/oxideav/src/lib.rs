@@ -18,6 +18,8 @@ pub use oxideav_pipeline as pipeline;
 pub use oxideav_basic as basic;
 #[cfg(feature = "flac")]
 pub use oxideav_flac as flac;
+#[cfg(feature = "mkv")]
+pub use oxideav_mkv as mkv;
 #[cfg(feature = "ogg")]
 pub use oxideav_ogg as ogg;
 #[cfg(feature = "opus")]
@@ -60,6 +62,10 @@ impl Registries {
         {
             oxideav_flac::register_codecs(&mut codecs);
             oxideav_flac::register_containers(&mut containers);
+        }
+        #[cfg(feature = "mkv")]
+        {
+            oxideav_mkv::register(&mut containers);
         }
 
         Self { codecs, containers }

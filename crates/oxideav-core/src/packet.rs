@@ -13,6 +13,11 @@ pub struct PacketFlags {
     pub corrupt: bool,
     /// Packet should be discarded (e.g., decoder delay padding).
     pub discard: bool,
+    /// Packet is the last in its source container's natural framing unit
+    /// (Ogg page, MP4 chunk, MKV cluster, …). Container muxers may use this
+    /// signal to recreate similar boundaries in their output. Decoders
+    /// should ignore it.
+    pub unit_boundary: bool,
 }
 
 /// A chunk of compressed (encoded) data belonging to one stream.

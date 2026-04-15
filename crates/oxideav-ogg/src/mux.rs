@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use oxideav_container::{Muxer, WriteSeek};
-use oxideav_core::{Error, Packet, Result, StreamInfo};
+use oxideav_core::{CodecId, Error, Packet, Result, StreamInfo};
 
 use crate::codec_id;
 use crate::page::{self, flags, lace, Page};
@@ -33,6 +33,7 @@ pub fn open(output: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Box<dy
     }
     Ok(Box::new(OggMuxer {
         output,
+        streams: streams.to_vec(),
         per_stream,
         stream_order: streams.iter().map(|s| s.index).collect(),
         header_written: false,
@@ -49,6 +50,9 @@ fn derive_serial(s: &StreamInfo) -> u32 {
 
 struct OggMuxer {
     output: Box<dyn WriteSeek>,
+    /// Stream descriptors retained so write_header can reconstruct the
+    /// codec-specific setup packets from each stream's extradata.
+    streams: Vec<StreamInfo>,
     per_stream: HashMap<u32, StreamWriter>,
     stream_order: Vec<u32>,
     header_written: bool,
@@ -155,6 +159,17 @@ impl Muxer for OggMuxer {
             return Err(Error::other("Ogg muxer: write_header called twice"));
         }
         self.header_written = true;
+        // Reconstruct codec setup packets from each stream's extradata and
+        // emit them. Each is written via the normal write_packet path so the
+        // header_packet bookkeeping (one packet per page, granule = 0, BOS
+        // flag for the first) kicks in automatically.
+        let stream_clone = self.streams.clone();
+        for s in &stream_clone {
+            for hp in extract_codec_headers(&s.params.codec_id, &s.params.extradata) {
+                let pkt = Packet::new(s.index, s.time_base, hp);
+                self.write_packet(&pkt)?;
+            }
+        }
         Ok(())
     }
 
@@ -185,15 +200,18 @@ impl Muxer for OggMuxer {
             return Ok(());
         }
 
-        // Audio/video packet: pts (if set) marks the page's end-of-stream
-        // granule. The demuxer sets pts only on the last packet of each page
-        // — preserving that signal here recreates the original page layout.
+        // Audio/video packet. The page's granule_position is set from the
+        // most recent pts seen on this page (this packet's pts wins if
+        // present; otherwise the buffered value carries through). A new
+        // page is flushed when the source signaled a page boundary via
+        // `unit_boundary`. This separates *pts-per-packet* (decoders care)
+        // from *page boundaries* (Ogg cares).
         if let Some(pts) = packet.pts {
             writer.buffered.granule_position = pts;
+        }
+        if packet.flags.unit_boundary {
             self.flush_page(stream_index, true)?;
         }
-        // If pts is None, accumulate without flushing — page granule stays at
-        // -1 (no packet ends here).
 
         Ok(())
     }
@@ -235,6 +253,70 @@ impl Muxer for OggMuxer {
 // Keep imports honest for downstream consumers.
 #[allow(dead_code)]
 const _SANITY: () = {
-    // Reference page module so it stays linked even if otherwise unused here.
     let _ = page::CAPTURE_PATTERN;
 };
+
+/// Inverse of `oxideav_ogg::demux::build_codec_private`: turn a stream's
+/// extradata back into the per-codec sequence of header packets that an Ogg
+/// stream needs at its start.
+fn extract_codec_headers(codec_id: &CodecId, extradata: &[u8]) -> Vec<Vec<u8>> {
+    if extradata.is_empty() {
+        return Vec::new();
+    }
+    match codec_id.as_str() {
+        "vorbis" => parse_xiph_lacing(extradata).unwrap_or_default(),
+        "opus" => {
+            // OpusHead followed by a synthetic minimal OpusTags. (Original
+            // tags are dropped during demux — they're not load-bearing.)
+            let head = extradata.to_vec();
+            let mut tags = Vec::with_capacity(20);
+            tags.extend_from_slice(b"OpusTags");
+            tags.extend_from_slice(&0u32.to_le_bytes()); // vendor string length = 0
+            tags.extend_from_slice(&0u32.to_le_bytes()); // user comment count = 0
+            vec![head, tags]
+        }
+        _ => vec![extradata.to_vec()],
+    }
+}
+
+/// Parse a Xiph-laced 3-packet header blob (Vorbis/Theora layout). The first
+/// byte is `(packet_count - 1)`, followed by `(packet_count - 1)` lacing
+/// records (each a series of 0xFF terminators ending in a value < 0xFF).
+fn parse_xiph_lacing(buf: &[u8]) -> Option<Vec<Vec<u8>>> {
+    if buf.is_empty() {
+        return None;
+    }
+    let n_packets = buf[0] as usize + 1;
+    let mut sizes = Vec::with_capacity(n_packets);
+    let mut i = 1usize;
+    for _ in 0..n_packets - 1 {
+        let mut s = 0usize;
+        loop {
+            if i >= buf.len() {
+                return None;
+            }
+            let b = buf[i];
+            i += 1;
+            s += b as usize;
+            if b < 255 {
+                break;
+            }
+        }
+        sizes.push(s);
+    }
+    let used: usize = sizes.iter().sum();
+    if i + used > buf.len() {
+        return None;
+    }
+    let last_size = buf.len() - i - used;
+    sizes.push(last_size);
+    let mut packets = Vec::with_capacity(n_packets);
+    for sz in sizes {
+        if i + sz > buf.len() {
+            return None;
+        }
+        packets.push(buf[i..i + sz].to_vec());
+        i += sz;
+    }
+    Some(packets)
+}

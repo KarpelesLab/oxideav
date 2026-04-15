@@ -15,6 +15,8 @@ use crate::page::{self, Page};
 pub fn open(input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let mut state = OggDemuxer::new(input);
     state.read_bos_section()?;
+    state.read_until_headers_collected()?;
+    state.populate_extradata();
     Ok(Box::new(state))
 }
 
@@ -25,8 +27,11 @@ struct LogicalStream {
     /// a terminator (lacing 255). Concatenated with the next page's leading
     /// segments to form a complete packet.
     pending: Vec<u8>,
-    /// Number of header packets still to deliver with `pts = None`.
+    /// Number of header packets still to be absorbed (not delivered).
     headers_remaining: usize,
+    /// Header packets accumulated so far — used to populate codec-specific
+    /// extradata on the stream's `CodecParameters` once they're all in.
+    header_packets: Vec<Vec<u8>>,
     granule_seen: i64,
 }
 
@@ -122,6 +127,7 @@ impl OggDemuxer {
                 public_index,
                 pending: Vec::new(),
                 headers_remaining: codec_id::header_packet_count(&codec_id),
+                header_packets: Vec::new(),
                 granule_seen: 0,
             },
         );
@@ -154,6 +160,44 @@ impl OggDemuxer {
         let (page, consumed) = Page::parse(&full)?;
         debug_assert_eq!(consumed, full.len());
         Ok(Some(page))
+    }
+
+    /// After the BOS section, keep reading pages and absorbing header packets
+    /// until every logical stream has gathered all of its expected setup
+    /// packets (3 for Vorbis, 2 for Opus, …). Audio/video packets read in the
+    /// process are still queued; they'll be delivered by `next_packet` later.
+    fn read_until_headers_collected(&mut self) -> Result<()> {
+        loop {
+            let any_pending = self
+                .state_by_serial
+                .values()
+                .any(|s| s.headers_remaining > 0);
+            if !any_pending {
+                return Ok(());
+            }
+            // Drain queued pages from the BOS phase first; only then read more.
+            let page = if let Some(p) = self.page_queue.pop_front() {
+                p
+            } else {
+                match self.read_page()? {
+                    Some(p) => p,
+                    None => return Ok(()), // EOF before all headers — best-effort.
+                }
+            };
+            self.process_page(page)?;
+        }
+    }
+
+    /// Build codec-specific extradata for each stream from its accumulated
+    /// header packets and write it back to the stream's `CodecParameters`.
+    fn populate_extradata(&mut self) {
+        for state in self.state_by_serial.values() {
+            let codec_id = self.streams[state.public_index].params.codec_id.clone();
+            let extra = build_codec_private(&codec_id, &state.header_packets);
+            if !extra.is_empty() {
+                self.streams[state.public_index].params.extradata = extra;
+            }
+        }
     }
 
     /// Drain the next packet from the queued pages, possibly reading more.
@@ -208,14 +252,17 @@ impl OggDemuxer {
 
         let last_idx = completed.len().checked_sub(1);
         for (i, data) in completed.into_iter().enumerate() {
-            // Header packets get no pts (they carry no sample timing).
-            // Non-last packets on this page also get pts = None; only the
-            // last-terminated packet on the page carries the page's granule.
-            // Downstream muxers use this signal to recreate page boundaries.
-            let pts = if stream.headers_remaining > 0 {
+            if stream.headers_remaining > 0 {
+                stream.header_packets.push(data);
                 stream.headers_remaining -= 1;
-                None
-            } else if Some(i) == last_idx && page.granule_position >= 0 {
+                continue;
+            }
+            let is_last = Some(i) == last_idx;
+            // pts on the last-on-page packet carries the page's granule
+            // (Ogg's only timing signal); intermediate packets get None.
+            // Container-aware muxers that need per-packet pts should derive
+            // them from codec-specific knowledge (e.g. Opus TOC parsing).
+            let pts = if is_last && page.granule_position >= 0 {
                 Some(page.granule_position)
             } else {
                 None
@@ -224,6 +271,7 @@ impl OggDemuxer {
             pkt.pts = pts;
             pkt.dts = pts;
             pkt.flags.keyframe = true;
+            pkt.flags.unit_boundary = is_last;
             self.out_queue.push_back(pkt);
         }
 
@@ -315,6 +363,42 @@ fn parse_opus_id(p: &mut CodecParameters, packet: &[u8]) -> Result<()> {
     // Opus always decodes to 48 kHz; "input_sample_rate" is informational.
     p.sample_rate = Some(if input_rate > 0 { input_rate } else { 48_000 });
     Ok(())
+}
+
+/// Build the per-codec setup blob ("CodecPrivate" in Matroska, "esds"-equivalent
+/// in MP4, etc.) from the header packets gathered out of an Ogg stream.
+///
+/// - Vorbis: Xiph-laced concatenation of all 3 header packets (id, comment, setup).
+/// - Opus: just the OpusHead identification packet (OpusTags discarded).
+/// - Anything else: concatenate the headers and let the codec sort it out.
+fn build_codec_private(codec_id: &CodecId, packets: &[Vec<u8>]) -> Vec<u8> {
+    match codec_id.as_str() {
+        "vorbis" if packets.len() == 3 => {
+            let mut out = Vec::with_capacity(
+                1 + packets[0].len() / 255 + 1 + packets[1].len() / 255 + 1
+                    + packets.iter().map(|p| p.len()).sum::<usize>(),
+            );
+            out.push(0x02); // 3 packets — 1
+            out.extend(xiph_lace_size(packets[0].len()));
+            out.extend(xiph_lace_size(packets[1].len()));
+            out.extend_from_slice(&packets[0]);
+            out.extend_from_slice(&packets[1]);
+            out.extend_from_slice(&packets[2]);
+            out
+        }
+        "opus" => packets.first().cloned().unwrap_or_default(),
+        _ => packets.iter().flatten().copied().collect(),
+    }
+}
+
+fn xiph_lace_size(mut n: usize) -> Vec<u8> {
+    let mut v = Vec::with_capacity(n / 255 + 1);
+    while n >= 255 {
+        v.push(255);
+        n -= 255;
+    }
+    v.push(n as u8);
+    v
 }
 
 fn read_exact_or_eof(r: &mut dyn Read, buf: &mut [u8]) -> Result<bool> {
