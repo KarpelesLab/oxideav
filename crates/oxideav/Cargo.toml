@@ -9,13 +9,14 @@ authors.workspace = true
 description = "Central aggregator crate for oxideav — re-exports and a prebuilt registry"
 
 [features]
-default = ["basic", "ogg", "vorbis", "opus", "flac", "mkv"]
+default = ["basic", "ogg", "vorbis", "opus", "flac", "mkv", "mp4"]
 basic = ["dep:oxideav-basic"]
 ogg = ["dep:oxideav-ogg"]
 vorbis = ["dep:oxideav-vorbis"]
 opus = ["dep:oxideav-opus"]
 flac = ["dep:oxideav-flac"]
 mkv = ["dep:oxideav-mkv"]
+mp4 = ["dep:oxideav-mp4"]
 
 [dependencies]
 oxideav-core = { workspace = true }
@@ -28,3 +29,4 @@ oxideav-vorbis = { workspace = true, optional = true }
 oxideav-opus = { workspace = true, optional = true }
 oxideav-flac = { workspace = true, optional = true }
 oxideav-mkv = { workspace = true, optional = true }
+oxideav-mp4 = { workspace = true, optional = true }

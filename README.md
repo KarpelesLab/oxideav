@@ -34,6 +34,7 @@ oxideav/
 │   ├── oxideav-flac/         # FLAC native container + decoder + encoder
 │   ├── oxideav-opus/         # Opus codec (header parsing; decoder TBD)
 │   ├── oxideav-mkv/          # Matroska / WebM container (EBML), demux + mux
+│   ├── oxideav-mp4/          # MP4 / ISO base media file format, demux only
 │   ├── oxideav-<format>/     # one crate per future complex format:
 │   │                         #   oxideav-mp4, oxideav-h264, oxideav-av1, …
 │   │
@@ -88,12 +89,16 @@ from).
 | Ogg Vorbis    | `oxideav-ogg`             | `oxideav-vorbis`     |  ✅   |  ✅   |        |        |
 | Ogg Opus      | `oxideav-ogg`             | `oxideav-opus`       |  ✅   |  ✅   |        |        |
 | Matroska      | `oxideav-mkv` (FLAC/Opus/Vorbis/PCM) | (via codec crate) |  ✅   |  ✅   |   ✅\*  |        |
+| MP4/M4A       | `oxideav-mp4` (FLAC/ALAC/AAC/Opus/H264/...) | (via codec crate) |  ✅   |  ✅\*\* |  ✅\*  |        |
 
 \* When combined with a codec whose decoder is implemented (FLAC today).
 
-Cross-container remux works: FLAC ↔ MKV and Ogg ↔ MKV with decoded-audio
-MD5 preserved for FLAC and Vorbis; Opus→MKV produces a playable stream with
-a minor end-trim discrepancy still being tracked.
+\*\* MP4 demuxing is implemented; MP4 muxing is deferred (requires sample-table
+buffering or a two-pass write).
+
+Cross-container remux works: FLAC ↔ MKV, Ogg ↔ MKV, MP4 → FLAC/MKV with
+decoded-audio MD5 preserved for FLAC and Vorbis. Opus→MKV produces a
+playable stream with a minor end-trim discrepancy still being tracked.
 
 CLI verbs: `list`, `probe`, `remux`, `transcode`. Example:
 
