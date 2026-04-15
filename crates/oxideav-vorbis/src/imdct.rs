@@ -77,8 +77,10 @@ pub fn imdct_naive(spectrum: &[f32], output: &mut [f32]) {
     let half = spectrum.len();
     let n = half * 2;
     debug_assert_eq!(output.len(), n);
+    // Vorbis I §1.3.5: X_n = (2/N) Σ Y_k cos(π/N * (n + 0.5 + N/4) * (2k+1))
     let scale = PI / (2.0 * n as f64);
     let nh = n as f64 / 2.0;
+    let norm = 2.0 / n as f64;
     for i in 0..n {
         let base = (2.0 * i as f64 + 1.0 + nh) * scale;
         let mut acc = 0f64;
@@ -86,7 +88,7 @@ pub fn imdct_naive(spectrum: &[f32], output: &mut [f32]) {
             let phase = base * (2.0 * k as f64 + 1.0);
             acc += spectrum[k] as f64 * phase.cos();
         }
-        output[i] = acc as f32;
+        output[i] = (acc * norm) as f32;
     }
 }
 
