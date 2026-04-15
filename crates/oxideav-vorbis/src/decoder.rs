@@ -10,7 +10,7 @@ use oxideav_core::{
 use crate::bitreader::BitReader;
 use crate::floor::{decode_floor_packet, synth_floor1, Floor1Decoded};
 use crate::identification::{parse_identification_header, Identification};
-use crate::imdct::{build_window, imdct_naive};
+use crate::imdct::{imdct_naive, sin_window_sample};
 use crate::residue::decode_residue;
 use crate::setup::{parse_setup, Floor, Setup};
 
@@ -41,9 +41,7 @@ pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
         blocksize_short,
         blocksize_long,
         time_base,
-        prev_block_long: false,
         prev_tail: Vec::new(),
-        first_block: true,
         pending: None,
         eof: false,
         emit_pts: 0,
@@ -57,17 +55,14 @@ struct VorbisDecoder {
     blocksize_short: u32,
     blocksize_long: u32,
     time_base: TimeBase,
-    /// Whether the previous block was long. Needed to compute the size of
-    /// the overlap region for the *current* block's left half.
-    prev_block_long: bool,
-    /// Per-channel tail samples carried over from the previous packet; this
-    /// is the right half of the previous block's IMDCT output, post-window.
-    /// On a fresh stream it's empty (the first packet's left-half output is
-    /// discarded because there's nothing to overlap with).
+    /// Per-channel "right tail" samples saved from the previous packet's
+    /// IMDCT output. This is a raw (unwindowed) slice of the previous
+    /// block in the range `[right_win_start, right_win_end)` — exactly
+    /// the region that overlaps with the current block's left window.
+    ///
+    /// Empty on the first decoded packet (no prior block to overlap with);
+    /// that first packet emits zero PCM samples but populates this tail.
     prev_tail: Vec<Vec<f32>>,
-    /// True until we've emitted samples for the second packet (Vorbis
-    /// requires two blocks to produce the first PCM samples).
-    first_block: bool,
     pending: Option<Packet>,
     eof: bool,
     /// Running pts of the next sample we'll emit.
@@ -288,80 +283,80 @@ fn decode_one(d: &mut VorbisDecoder, packet: &Packet) -> Result<Frame> {
         }
     }
 
-    // IMDCT per channel → time-domain length-n samples. Apply window.
-    let window = build_window(n, block_long, prev_long_for_window, next_long_for_window);
+    if trace {
+        eprintln!(
+            "[vorbis] end_of_decode bitpos={}/{}",
+            br.bit_position(),
+            packet.data.len() * 8
+        );
+    }
+
+    // IMDCT per channel → time-domain length-n samples (UNWINDOWED). The
+    // window is applied below, only in the overlap regions, per
+    // Vorbis I §1.3.4.
     let mut td: Vec<Vec<f32>> = Vec::with_capacity(n_channels);
     for ch in 0..n_channels {
         let mut out = vec![0f32; n];
         imdct_naive(&spectrum[ch], &mut out);
-        for i in 0..n {
-            out[i] *= window[i];
-        }
         td.push(out);
     }
 
-    // Overlap-add. The output sample count from this packet is determined by
-    // the overlap of the *previous* packet's right half and *this* packet's
-    // left half (Vorbis I §1.3.6).
-    let prev_n = if d.prev_block_long {
-        d.blocksize_long as usize
+    // Compute the four asymmetric window boundaries (Vorbis I §4.3.1 /
+    // lewton's reference). `bs0 = 1 << blocksize_0` is the SHORT blocksize.
+    // For long blocks, the left transition is narrow (short-sized) when
+    // `prev_long_for_window=false`, and similarly on the right.
+    let bs0 = d.blocksize_short as usize;
+    let (left_win_start, left_win_end) = if !block_long || prev_long_for_window {
+        // Short curr: always symmetric with full half-window. Long curr with
+        // prev=long: long rising window covering [0..n/2].
+        (0usize, n / 2)
     } else {
-        d.blocksize_short as usize
+        ((n - bs0) / 4, (n + bs0) / 4)
     };
-    let n_out = if d.first_block {
-        0 // First packet emits no PCM (need a second packet to overlap with).
+    let (right_win_start, right_win_end) = if !block_long || next_long_for_window {
+        (n / 2, n)
     } else {
-        // Output region length = right_half(prev) + left_half(curr) where
-        // both halves have the same size = min(prev_n, n) / 2.
-
-        (prev_n.min(n)) / 2
+        ((3 * n - bs0) / 4, (3 * n + bs0) / 4)
     };
+    let left_overlap_n = left_win_end - left_win_start;
+    let right_overlap_n = right_win_end - right_win_start;
 
+    // Overlap-add with the previous packet's saved tail. Emit samples in
+    // `[left_win_start, right_win_start)`. The prev tail length equals
+    // `left_overlap_n` by construction (its size was chosen when saved).
     let mut output_samples = vec![Vec::<f32>::new(); n_channels];
-    if !d.first_block {
+    if !d.prev_tail.is_empty() {
         for ch in 0..n_channels {
             let prev = &d.prev_tail[ch];
-            let curr = &td[ch];
-            let prev_right_start = prev_n / 2 + (prev_n / 2 - n_out) / 2; // start of the right-half region inside prev tail
-            let curr_left_start = (n / 2 - n_out) / 2; // mirror on this side
-            let _ = prev_right_start;
-            let _ = curr_left_start;
-            // The reference implementation uses simple 1-to-1 overlap of the
-            // common region: output[i] = prev_right[i] + curr_left[i] over
-            // `n_out` samples. We approximate that by indexing the centred
-            // halves directly.
-            let mut out = Vec::with_capacity(n_out);
-            let ph = prev_n / 2;
-            let ch_h = n / 2;
-            // prev tail length is `prev_n` (the full IMDCT output). Its
-            // right half is prev[prev_n/2..]. The next-block's left half
-            // is curr[0..n/2]. The actual emitted samples sit at the
-            // *intersection* of those halves — for symmetric long/long
-            // transitions this is exactly n/2 samples each.
-            for i in 0..n_out {
-                // Map i to positions in prev right half and curr left half.
-                let prev_pos = ph + i + (ph.saturating_sub(n_out));
-                let curr_pos = i + (ch_h.saturating_sub(n_out));
-                let pv = if prev_pos < prev.len() {
-                    prev[prev_pos]
-                } else {
-                    0.0
-                };
-                let cv = if curr_pos < curr.len() {
-                    curr[curr_pos]
-                } else {
-                    0.0
-                };
-                out.push(pv + cv);
+            let curr = &mut td[ch];
+            // Sanity: if prev was stored with a differently-sized overlap
+            // region (e.g. a stream-format bug upstream), clamp.
+            let plen = prev.len().min(left_overlap_n);
+            // win_slope[i] = sin(pi/2 * sin^2(pi*(i+0.5)/(2*plen)))
+            // rising on the current block; prev was stored unwindowed, so
+            // we multiply it by the falling slope (= win_slope[plen-1-i]).
+            for i in 0..plen {
+                let rising = sin_window_sample(i, 2 * plen);
+                let falling = sin_window_sample(plen - 1 - i, 2 * plen);
+                let ci = left_win_start + i;
+                curr[ci] = curr[ci] * rising + prev[i] * falling;
             }
-            output_samples[ch] = out;
+            // Emit from left_win_start to right_win_start.
+            let mut emit = Vec::with_capacity(right_win_start - left_win_start);
+            emit.extend_from_slice(&curr[left_win_start..right_win_start]);
+            output_samples[ch] = emit;
         }
     }
 
-    // Stash this packet's full IMDCT output as the new tail.
-    d.prev_tail = td;
-    d.prev_block_long = block_long;
-    d.first_block = false;
+    // Save the "right tail" for next iteration: raw IMDCT values in
+    // [right_win_start, right_win_end). These remain unwindowed; next
+    // packet will apply the matching falling slope during its OLA step.
+    let mut new_tail: Vec<Vec<f32>> = Vec::with_capacity(n_channels);
+    for ch in 0..n_channels {
+        new_tail.push(td[ch][right_win_start..right_win_end].to_vec());
+    }
+    d.prev_tail = new_tail;
+    let _ = right_overlap_n;
 
     // Pack interleaved S16 PCM.
     let n_samples = output_samples.first().map(|v| v.len()).unwrap_or(0) as u32;

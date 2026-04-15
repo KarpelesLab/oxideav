@@ -147,12 +147,12 @@ fn decode_partitioned(
                             br.bit_position()
                         );
                     }
-                    // Decompose into base-`classifications` digits, low digit
-                    // first — the first partition in this codeword uses
-                    // `class_id % classifications`, the next uses
-                    // `(class_id / classifications) % classifications`, etc.
+                    // Vorbis I §8.6.2 step 6: decompose into
+                    // base-`classifications` digits HIGH-DIGIT-FIRST. The
+                    // LAST partition in the group gets class_id % classifications;
+                    // the FIRST partition gets the high-order digit.
                     let mut tmp = class_id;
-                    for i in 0..classwords_per_codeword {
+                    for i in (0..classwords_per_codeword).rev() {
                         if partition_idx + i < n_partitions {
                             classifications_table[ch][partition_idx + i] =
                                 tmp % classifications as u32;

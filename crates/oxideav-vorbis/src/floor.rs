@@ -222,49 +222,48 @@ pub fn synth_floor1(
             final_y[j] = predicted;
         }
     }
+    // Vorbis I §7.2.4 step 1: clamp final_y to [0, range-1].
+    for y in final_y.iter_mut() {
+        if *y < 0 {
+            *y = 0;
+        } else if *y >= range {
+            *y = range - 1;
+        }
+    }
 
-    // Render the floor curve into `output` by walking the sorted posts and
-    // drawing line segments between each consecutive pair of "step2 used"
-    // posts. Multiplies into `output` (which holds the residue values).
-    let mut rendered: Vec<bool> = vec![false; n_half];
-    let mut last_used_idx_in_sorted: usize = 0; // index in `order`
+    // Render the floor curve into `output` per libvorbis floor1_inverse2:
+    // Bresenham walks the PRE-clamped `y * multiplier` space (0..=255), not
+    // the raw Y space. This matters for bit-exact output with fractional
+    // slopes: libvorbis rounds in the multiplied space.
     let mut prev_x = 0i32;
-    let mut prev_y = final_y[order[0]];
+    let mut prev_y_mult = (final_y[order[0]].wrapping_mul(multiplier)).clamp(0, 255);
     for k in 1..n_posts {
         let i = order[k];
         if !step2_used[i] {
             continue;
         }
         let cur_x = floor.xlist[i] as i32;
-        let cur_y = final_y[i];
+        let cur_y_mult = (final_y[i].wrapping_mul(multiplier)).clamp(0, 255);
         if cur_x > prev_x {
             render_line(
                 prev_x,
-                prev_y,
+                prev_y_mult,
                 cur_x,
-                cur_y,
-                multiplier,
+                cur_y_mult,
                 n_half as i32,
                 output,
-                &mut rendered,
             );
         }
         prev_x = cur_x;
-        prev_y = cur_y;
-        last_used_idx_in_sorted = k;
+        prev_y_mult = cur_y_mult;
     }
-    let _ = last_used_idx_in_sorted;
-    // Anything past the final used post is filled with the last Y.
+    // Fill any remaining bins past the last used post with the final Y.
     if (prev_x as usize) < n_half {
-        let mul = mult_value(prev_y, multiplier);
-        for i in prev_x as usize..n_half {
-            if !rendered[i] {
-                output[i] *= mul;
-                rendered[i] = true;
-            }
+        let mul = crate::dbtable::FLOOR1_INVERSE_DB[prev_y_mult as usize];
+        for v in output.iter_mut().take(n_half).skip(prev_x as usize) {
+            *v *= mul;
         }
     }
-    // Bins before the first post (X=0): also rendered with the post-0 value.
     Ok(())
 }
 
@@ -282,30 +281,16 @@ fn render_point(x0: i32, y0: i32, x1: i32, y1: i32, x: i32) -> i32 {
     }
 }
 
-/// Convert a rendered Y value (0..=range-1) to the linear-magnitude
-/// multiplier via the dB lookup table. The index uses the low 8 bits of
-/// `Y * multiplier` per Vorbis I §9.2.6 and falls back to 0 if Y is out
-/// of range.
-fn mult_value(y: i32, multiplier: i32) -> f32 {
-    let idx = y.wrapping_mul(multiplier) & 0xFF;
-    crate::dbtable::FLOOR1_INVERSE_DB[idx as usize]
-}
-
-/// Render a line from (x0, y0) to (x1, y1) into the spectral output
-/// buffer, multiplying each bin's existing value by the floor's
+/// Render a line from (x0, y0_mult) to (x1, y1_mult) into the spectral
+/// output buffer, multiplying each bin's existing value by the floor's
 /// linear-magnitude multiplier at that frequency. `n_half` is the spectrum
 /// length (blocksize / 2); writes outside that are clipped.
-#[allow(clippy::too_many_arguments)]
-fn render_line(
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    multiplier: i32,
-    n_half: i32,
-    out: &mut [f32],
-    rendered: &mut [bool],
-) {
+///
+/// The Y values passed in are PRE-MULTIPLIED by `floor1_multiplier` and
+/// clamped to [0, 255] — matches libvorbis floor1_inverse2. Bresenham
+/// operates in that space so the dB-lookup index is an integer running
+/// along the line.
+fn render_line(x0: i32, y0: i32, x1: i32, y1: i32, n_half: i32, out: &mut [f32]) {
     let dy = y1 - y0;
     let adx = x1 - x0;
     let ady = dy.abs();
@@ -315,14 +300,14 @@ fn render_line(
     let mut y = y0;
     let mut err = 0i32;
     let ady = ady - base.abs() * adx;
+    let end = x1.min(n_half);
 
-    if x >= 0 && x < n_half {
-        out[x as usize] *= mult_value(y, multiplier);
-        rendered[x as usize] = true;
+    if x >= 0 && x < end {
+        out[x as usize] *= crate::dbtable::FLOOR1_INVERSE_DB[(y & 0xFF) as usize];
     }
     while {
         x += 1;
-        x < x1 && x < n_half
+        x < end
     } {
         err += ady;
         if err >= adx {
@@ -332,8 +317,7 @@ fn render_line(
             y += base;
         }
         if x >= 0 {
-            out[x as usize] *= mult_value(y, multiplier);
-            rendered[x as usize] = true;
+            out[x as usize] *= crate::dbtable::FLOOR1_INVERSE_DB[(y & 0xFF) as usize];
         }
     }
 }
