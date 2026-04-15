@@ -30,6 +30,7 @@ pub fn register(reg: &mut CodecRegistry) {
 
 const CODEC_IDS: &[&str] = &[
     "pcm_u8",
+    "pcm_s8",
     "pcm_s16le",
     "pcm_s24le",
     "pcm_s32le",
@@ -41,6 +42,7 @@ const CODEC_IDS: &[&str] = &[
 pub fn sample_format_for(id: &CodecId) -> Option<SampleFormat> {
     Some(match id.as_str() {
         "pcm_u8" => SampleFormat::U8,
+        "pcm_s8" => SampleFormat::S8,
         "pcm_s16le" => SampleFormat::S16,
         "pcm_s24le" => SampleFormat::S24,
         "pcm_s32le" => SampleFormat::S32,
@@ -55,6 +57,7 @@ pub fn sample_format_for(id: &CodecId) -> Option<SampleFormat> {
 pub fn codec_id_for(fmt: SampleFormat) -> Option<CodecId> {
     Some(CodecId::new(match fmt {
         SampleFormat::U8 => "pcm_u8",
+        SampleFormat::S8 => "pcm_s8",
         SampleFormat::S16 => "pcm_s16le",
         SampleFormat::S24 => "pcm_s24le",
         SampleFormat::S32 => "pcm_s32le",

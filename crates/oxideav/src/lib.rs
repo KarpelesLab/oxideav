@@ -18,8 +18,12 @@ pub use oxideav_pipeline as pipeline;
 pub use oxideav_basic as basic;
 #[cfg(feature = "flac")]
 pub use oxideav_flac as flac;
+#[cfg(feature = "iff")]
+pub use oxideav_iff as iff;
 #[cfg(feature = "mkv")]
 pub use oxideav_mkv as mkv;
+#[cfg(feature = "amiga_mod")]
+pub use oxideav_mod as amiga_mod;
 #[cfg(feature = "mp4")]
 pub use oxideav_mp4 as mp4;
 #[cfg(feature = "ogg")]
@@ -72,6 +76,15 @@ impl Registries {
         #[cfg(feature = "mp4")]
         {
             oxideav_mp4::register(&mut containers);
+        }
+        #[cfg(feature = "iff")]
+        {
+            oxideav_iff::register(&mut containers);
+        }
+        #[cfg(feature = "amiga_mod")]
+        {
+            oxideav_mod::register_codecs(&mut codecs);
+            oxideav_mod::register_containers(&mut containers);
         }
 
         Self { codecs, containers }

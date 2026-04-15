@@ -127,7 +127,10 @@ impl Codebook {
                 }
             }
         }
-        Err(Error::invalid("Vorbis codebook: no codeword matched"))
+        Err(Error::invalid(format!(
+            "Vorbis codebook: no codeword matched after {max_len} bits (entries={})",
+            self.entries
+        )))
     }
 
     /// Build canonical-Huffman codewords from `codeword_lengths` per Vorbis I §3.2.1.

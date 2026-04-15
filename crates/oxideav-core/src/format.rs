@@ -14,6 +14,8 @@ pub enum MediaType {
 pub enum SampleFormat {
     /// Unsigned 8-bit, interleaved.
     U8,
+    /// Signed 8-bit, interleaved. Native format of Amiga 8SVX and MOD samples.
+    S8,
     /// Signed 16-bit little-endian, interleaved.
     S16,
     /// Signed 24-bit packed (3 bytes/sample) little-endian, interleaved.
@@ -43,7 +45,7 @@ impl SampleFormat {
     /// Bytes per sample *per channel*.
     pub fn bytes_per_sample(&self) -> usize {
         match self {
-            Self::U8 | Self::U8P => 1,
+            Self::U8 | Self::U8P | Self::S8 => 1,
             Self::S16 | Self::S16P => 2,
             Self::S24 => 3,
             Self::S32 | Self::S32P | Self::F32 | Self::F32P => 4,
