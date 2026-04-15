@@ -22,6 +22,14 @@ pub use oxideav_basic as basic;
 pub use oxideav_celt as celt;
 #[cfg(feature = "flac")]
 pub use oxideav_flac as flac;
+#[cfg(feature = "g7231")]
+pub use oxideav_g7231 as g7231;
+#[cfg(feature = "g728")]
+pub use oxideav_g728 as g728;
+#[cfg(feature = "g729")]
+pub use oxideav_g729 as g729;
+#[cfg(feature = "gsm")]
+pub use oxideav_gsm as gsm;
 #[cfg(feature = "iff")]
 pub use oxideav_iff as iff;
 #[cfg(feature = "mkv")]
@@ -40,6 +48,8 @@ pub use oxideav_mp4 as mp4;
 pub use oxideav_ogg as ogg;
 #[cfg(feature = "opus")]
 pub use oxideav_opus as opus;
+#[cfg(feature = "speex")]
+pub use oxideav_speex as speex;
 #[cfg(feature = "vorbis")]
 pub use oxideav_vorbis as vorbis;
 
@@ -115,6 +125,26 @@ impl Registries {
         #[cfg(feature = "celt")]
         {
             oxideav_celt::register(&mut codecs);
+        }
+        #[cfg(feature = "g7231")]
+        {
+            oxideav_g7231::register(&mut codecs);
+        }
+        #[cfg(feature = "g728")]
+        {
+            oxideav_g728::register(&mut codecs);
+        }
+        #[cfg(feature = "g729")]
+        {
+            oxideav_g729::register(&mut codecs);
+        }
+        #[cfg(feature = "gsm")]
+        {
+            oxideav_gsm::register(&mut codecs);
+        }
+        #[cfg(feature = "speex")]
+        {
+            oxideav_speex::register(&mut codecs);
         }
 
         Self { codecs, containers }

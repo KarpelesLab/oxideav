@@ -24,6 +24,11 @@ default = [
     "mp3",
     "aac",
     "celt",
+    "g7231",
+    "g728",
+    "g729",
+    "gsm",
+    "speex",
 ]
 basic = ["dep:oxideav-basic"]
 ogg = ["dep:oxideav-ogg"]
@@ -39,6 +44,11 @@ mp2 = ["dep:oxideav-mp2"]
 mp3 = ["dep:oxideav-mp3"]
 aac = ["dep:oxideav-aac"]
 celt = ["dep:oxideav-celt"]
+g7231 = ["dep:oxideav-g7231"]
+g728 = ["dep:oxideav-g728"]
+g729 = ["dep:oxideav-g729"]
+gsm = ["dep:oxideav-gsm"]
+speex = ["dep:oxideav-speex"]
 
 [dependencies]
 oxideav-core = { workspace = true }
@@ -59,3 +69,8 @@ oxideav-mp2 = { workspace = true, optional = true }
 oxideav-mp3 = { workspace = true, optional = true }
 oxideav-aac = { workspace = true, optional = true }
 oxideav-celt = { workspace = true, optional = true }
+oxideav-g7231 = { workspace = true, optional = true }
+oxideav-g728 = { workspace = true, optional = true }
+oxideav-g729 = { workspace = true, optional = true }
+oxideav-gsm = { workspace = true, optional = true }
+oxideav-speex = { workspace = true, optional = true }

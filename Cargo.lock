@@ -127,6 +127,10 @@ dependencies = [
  "oxideav-container",
  "oxideav-core",
  "oxideav-flac",
+ "oxideav-g7231",
+ "oxideav-g728",
+ "oxideav-g729",
+ "oxideav-gsm",
  "oxideav-iff",
  "oxideav-mkv",
  "oxideav-mod",
@@ -137,6 +141,7 @@ dependencies = [
  "oxideav-ogg",
  "oxideav-opus",
  "oxideav-pipeline",
+ "oxideav-speex",
  "oxideav-vorbis",
 ]
 
@@ -200,6 +205,38 @@ version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-g7231"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-g728"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-g729"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-gsm"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
  "oxideav-core",
 ]
 
@@ -286,6 +323,14 @@ version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-speex"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
  "oxideav-core",
 ]
 
