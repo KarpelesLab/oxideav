@@ -102,4 +102,52 @@ fn parses_real_setup_from_disk() {
     let setup = parse_setup(&headers[2], id.audio_channels).unwrap();
     assert!(!setup.codebooks.is_empty(), "setup should have codebooks");
     assert!(!setup.modes.is_empty(), "setup should declare at least one mode");
+
+    // Now extract the first AUDIO packet from sine.ogg (page 2's first
+    // terminated packet) and partially decode it to validate the audio
+    // packet header + per-channel floor decode path.
+    let mut audio_pkt: Option<Vec<u8>> = None;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut packets_seen = 0usize;
+    let mut i = 0usize;
+    'outer: while i + 27 <= data.len() {
+        if &data[i..i + 4] != b"OggS" {
+            break;
+        }
+        let n_segs = data[i + 26] as usize;
+        let lacing = &data[i + 27..i + 27 + n_segs];
+        let body_start = i + 27 + n_segs;
+        let mut off = body_start;
+        for &lv in lacing {
+            buf.extend_from_slice(&data[off..off + lv as usize]);
+            off += lv as usize;
+            if lv < 255 {
+                let pkt = std::mem::take(&mut buf);
+                packets_seen += 1;
+                if packets_seen == 4 {
+                    // First audio packet (after 3 headers).
+                    audio_pkt = Some(pkt);
+                    break 'outer;
+                }
+            }
+        }
+        i = body_start + lacing.iter().map(|&v| v as usize).sum::<usize>();
+    }
+    let audio_pkt = audio_pkt.expect("expected to find first audio packet");
+    // Vorbis blocksizes are 2^blocksize_0 / blocksize_1 (encoded fields).
+    let blocksize_short = 1u32 << id.blocksize_0;
+    let blocksize_long = 1u32 << id.blocksize_1;
+    let partial = oxideav_vorbis::audio_packet::decode_audio_packet_partial(
+        &audio_pkt,
+        &id,
+        &setup,
+        blocksize_short,
+        blocksize_long,
+    )
+    .expect("audio packet partial decode should succeed");
+    assert_eq!(
+        partial.floors.len(),
+        id.audio_channels as usize,
+        "one floor decoded per channel"
+    );
 }
