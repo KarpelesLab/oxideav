@@ -116,7 +116,9 @@ Transcoded song.flac → song.wav (pcm_s16le): 482 pkts in, 482 frames decoded, 
 5. ✅ Ogg container with byte-faithful page boundary preservation
 6. ✅ FLAC native container + codec (decode + encode, both bit-exact)
 7. ✅ Vorbis + Opus identification headers (probe + remux today)
-8. Vorbis decoder (codebooks, floors, residues, MDCT) — major project
+8. Vorbis decoder — **in progress** (bit reader, codebooks, setup header
+   parsing all done and verified against real files; floor + residue
+   decode + IMDCT next)
 9. Opus decoder (SILK + CELT, RFC 6716) — major project
 10. Filters: resample, sample-format conversion, pixel-format conversion, scale
 11. Multi-stream transcode + filter graph

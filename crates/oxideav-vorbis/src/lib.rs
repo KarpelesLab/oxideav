@@ -10,7 +10,10 @@
 //! - identify a Vorbis stream by id (e.g. for `oxideav probe` output),
 //! - cleanly remux Vorbis streams across containers (no decode required).
 
+pub mod bitreader;
+pub mod codebook;
 pub mod identification;
+pub mod setup;
 
 use oxideav_codec::{CodecRegistry, Decoder, Encoder};
 use oxideav_core::{CodecId, CodecParameters, Error, Result};
