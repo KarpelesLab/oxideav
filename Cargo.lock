@@ -124,7 +124,10 @@ dependencies = [
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
+ "oxideav-flac",
+ "oxideav-ogg",
  "oxideav-pipeline",
+ "oxideav-vorbis",
 ]
 
 [[package]]
@@ -166,11 +169,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxideav-flac"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-ogg"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
 name = "oxideav-pipeline"
 version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-vorbis"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
  "oxideav-core",
 ]
 

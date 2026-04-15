@@ -9,9 +9,11 @@ authors.workspace = true
 description = "Central aggregator crate for oxideav — re-exports and a prebuilt registry"
 
 [features]
-default = ["basic"]
-# Bundled simple formats (PCM, WAV, …).
+default = ["basic", "ogg", "vorbis", "flac"]
 basic = ["dep:oxideav-basic"]
+ogg = ["dep:oxideav-ogg"]
+vorbis = ["dep:oxideav-vorbis"]
+flac = ["dep:oxideav-flac"]
 
 [dependencies]
 oxideav-core = { workspace = true }
@@ -19,3 +21,6 @@ oxideav-codec = { workspace = true }
 oxideav-container = { workspace = true }
 oxideav-pipeline = { workspace = true }
 oxideav-basic = { workspace = true, optional = true }
+oxideav-ogg = { workspace = true, optional = true }
+oxideav-vorbis = { workspace = true, optional = true }
+oxideav-flac = { workspace = true, optional = true }

@@ -26,11 +26,16 @@ oxideav/
 │   ├── oxideav-pipeline/     # pipeline composition (source → transforms → sink)
 │   │
 │   ├── oxideav-basic/        # simple / standard formats grouped together:
-│   │                         #   PCM variants, raw audio/video, WAV, Y4M, …
+│   │                         #   PCM variants, WAV, Y4M (planned), …
 │   │
-│   ├── oxideav-<format>/     # one crate per complex modern format. Examples (future):
+│   ├── oxideav-ogg/          # Ogg container (RFC 3533): pages, packets, CRC32.
+│   │                         #   Codec-agnostic transport layer.
+│   ├── oxideav-vorbis/       # Vorbis audio codec (currently: id parser; decoder TBD)
+│   ├── oxideav-flac/         # FLAC native container + codec id
+│   │                         #   (decoder TBD — see roadmap)
+│   ├── oxideav-<format>/     # one crate per future complex format:
 │   │                         #   oxideav-mkv, oxideav-mp4, oxideav-h264,
-│   │                         #   oxideav-opus, oxideav-av1, oxideav-flac, …
+│   │                         #   oxideav-opus, oxideav-av1, …
 │   │
 │   ├── oxideav/              # aggregator: re-exports + feature-gated registry.
 │   │                         # Depend on this crate to get access to all codecs
@@ -70,17 +75,30 @@ If a format grows beyond that — multiple profiles, complex bitstream parsing, 
 
 ## Current status
 
-Early-stage. Bootstrapping the workspace and initial end-to-end demo (WAV + PCM via `oxideav-basic`).
+Early-stage. Probe + remux works end-to-end for WAV/PCM, FLAC native, and Ogg
+Vorbis. Codec **decoders** for FLAC and Vorbis are not yet implemented (they're
+substantial pure-Rust projects on their own); today these formats can be
+identified, transmuxed, and copied without re-encoding.
+
+| Format        | Container              | Codec                | Probe | Remux | Decode | Encode |
+|---------------|------------------------|----------------------|:-----:|:-----:|:------:|:------:|
+| PCM in WAV    | `oxideav-basic` (wav)  | `oxideav-basic` (pcm)|  ✅   |  ✅   |   ✅   |   ✅   |
+| FLAC native   | `oxideav-flac`         | `oxideav-flac`       |  ✅   |  ✅   |        |        |
+| Ogg Vorbis    | `oxideav-ogg`          | `oxideav-vorbis`     |  ✅   |  ✅   |        |        |
+| Ogg Opus      | `oxideav-ogg`          | (not yet)            |  ✅   |  ✅   |        |        |
 
 ## Roadmap
 
-1. Workspace, core types, codec/container traits ← **in progress**
-2. `oxideav-basic`: WAV container + PCM codec (first end-to-end)
-3. `oxideav` aggregator + CLI (`probe`, `transcode`, `info`)
-4. Pipeline composition with passthrough / remux
-5. First dedicated format crate (likely `oxideav-flac` or `oxideav-ogg`)
-6. Filters: resample, sample-format conversion, pixel-format conversion, scale
-7. Expand codec/container catalog one crate at a time
+1. ✅ Workspace, core types, codec/container traits
+2. ✅ `oxideav-basic`: WAV container + PCM codec (first end-to-end)
+3. ✅ `oxideav` aggregator + CLI (`list`, `probe`, `remux`)
+4. ✅ Pipeline composition with passthrough / remux
+5. ✅ Ogg container + Vorbis identification + FLAC container/codec id
+6. FLAC subframe decoder (LPC + Rice + channel decorrelation)
+7. Vorbis decoder (codebooks, floors, residues, MDCT) — major project
+8. Filters: resample, sample-format conversion, pixel-format conversion, scale
+9. Transcode pipeline (decode → filter → encode)
+10. Expand catalog: Opus, FLAC encoder, MP4/MKV containers, …
 
 ## Building
 

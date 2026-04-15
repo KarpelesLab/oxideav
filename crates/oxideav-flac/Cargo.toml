@@ -1,0 +1,14 @@
+[package]
+name = "oxideav-flac"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure-Rust FLAC: native container + codec id (decoder forthcoming)"
+
+[dependencies]
+oxideav-core = { workspace = true }
+oxideav-codec = { workspace = true }
+oxideav-container = { workspace = true }

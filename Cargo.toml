@@ -6,6 +6,9 @@ members = [
     "crates/oxideav-container",
     "crates/oxideav-pipeline",
     "crates/oxideav-basic",
+    "crates/oxideav-ogg",
+    "crates/oxideav-vorbis",
+    "crates/oxideav-flac",
     "crates/oxideav",
     "crates/oxideav-cli",
 ]
@@ -24,6 +27,9 @@ oxideav-codec = { path = "crates/oxideav-codec", version = "0.0.1" }
 oxideav-container = { path = "crates/oxideav-container", version = "0.0.1" }
 oxideav-pipeline = { path = "crates/oxideav-pipeline", version = "0.0.1" }
 oxideav-basic = { path = "crates/oxideav-basic", version = "0.0.1" }
+oxideav-ogg = { path = "crates/oxideav-ogg", version = "0.0.1" }
+oxideav-vorbis = { path = "crates/oxideav-vorbis", version = "0.0.1" }
+oxideav-flac = { path = "crates/oxideav-flac", version = "0.0.1" }
 oxideav = { path = "crates/oxideav", version = "0.0.1" }
 
 thiserror = "1"
