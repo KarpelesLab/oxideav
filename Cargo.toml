@@ -14,6 +14,11 @@ members = [
     "crates/oxideav-mp4",
     "crates/oxideav-iff",
     "crates/oxideav-mod",
+    "crates/oxideav-mp1",
+    "crates/oxideav-mp2",
+    "crates/oxideav-mp3",
+    "crates/oxideav-aac",
+    "crates/oxideav-celt",
     "crates/oxideav",
     "crates/oxideav-cli",
 ]
@@ -40,6 +45,11 @@ oxideav-mkv = { path = "crates/oxideav-mkv", version = "0.0.1" }
 oxideav-mp4 = { path = "crates/oxideav-mp4", version = "0.0.1" }
 oxideav-iff = { path = "crates/oxideav-iff", version = "0.0.1" }
 oxideav-mod = { path = "crates/oxideav-mod", version = "0.0.1" }
+oxideav-mp1 = { path = "crates/oxideav-mp1", version = "0.0.1" }
+oxideav-mp2 = { path = "crates/oxideav-mp2", version = "0.0.1" }
+oxideav-mp3 = { path = "crates/oxideav-mp3", version = "0.0.1" }
+oxideav-aac = { path = "crates/oxideav-aac", version = "0.0.1" }
+oxideav-celt = { path = "crates/oxideav-celt", version = "0.0.1" }
 oxideav = { path = "crates/oxideav", version = "0.0.1" }
 
 thiserror = "1"

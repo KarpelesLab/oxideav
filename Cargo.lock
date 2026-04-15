@@ -120,7 +120,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "oxideav"
 version = "0.0.1"
 dependencies = [
+ "oxideav-aac",
  "oxideav-basic",
+ "oxideav-celt",
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
@@ -128,6 +130,9 @@ dependencies = [
  "oxideav-iff",
  "oxideav-mkv",
  "oxideav-mod",
+ "oxideav-mp1",
+ "oxideav-mp2",
+ "oxideav-mp3",
  "oxideav-mp4",
  "oxideav-ogg",
  "oxideav-opus",
@@ -136,11 +141,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxideav-aac"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
 name = "oxideav-basic"
 version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-celt"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
  "oxideav-core",
 ]
 
@@ -206,6 +227,30 @@ version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp1"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp2"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp3"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
  "oxideav-core",
 ]
 

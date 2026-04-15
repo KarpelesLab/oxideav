@@ -1,0 +1,13 @@
+[package]
+name = "oxideav-mp3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure-Rust MPEG-1/2 Audio Layer III (MP3): scaffolding and frame-header parsing (full decoder WIP)"
+
+[dependencies]
+oxideav-core = { workspace = true }
+oxideav-codec = { workspace = true }

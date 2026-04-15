@@ -14,8 +14,12 @@ pub use oxideav_container as container;
 pub use oxideav_core as core;
 pub use oxideav_pipeline as pipeline;
 
+#[cfg(feature = "aac")]
+pub use oxideav_aac as aac;
 #[cfg(feature = "basic")]
 pub use oxideav_basic as basic;
+#[cfg(feature = "celt")]
+pub use oxideav_celt as celt;
 #[cfg(feature = "flac")]
 pub use oxideav_flac as flac;
 #[cfg(feature = "iff")]
@@ -24,6 +28,12 @@ pub use oxideav_iff as iff;
 pub use oxideav_mkv as mkv;
 #[cfg(feature = "amiga_mod")]
 pub use oxideav_mod as amiga_mod;
+#[cfg(feature = "mp1")]
+pub use oxideav_mp1 as mp1;
+#[cfg(feature = "mp2")]
+pub use oxideav_mp2 as mp2;
+#[cfg(feature = "mp3")]
+pub use oxideav_mp3 as mp3;
 #[cfg(feature = "mp4")]
 pub use oxideav_mp4 as mp4;
 #[cfg(feature = "ogg")]
@@ -85,6 +95,26 @@ impl Registries {
         {
             oxideav_mod::register_codecs(&mut codecs);
             oxideav_mod::register_containers(&mut containers);
+        }
+        #[cfg(feature = "mp1")]
+        {
+            oxideav_mp1::register(&mut codecs);
+        }
+        #[cfg(feature = "mp2")]
+        {
+            oxideav_mp2::register(&mut codecs);
+        }
+        #[cfg(feature = "mp3")]
+        {
+            oxideav_mp3::register(&mut codecs);
+        }
+        #[cfg(feature = "aac")]
+        {
+            oxideav_aac::register(&mut codecs);
+        }
+        #[cfg(feature = "celt")]
+        {
+            oxideav_celt::register(&mut codecs);
         }
 
         Self { codecs, containers }
