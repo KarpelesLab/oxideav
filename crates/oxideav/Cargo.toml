@@ -25,6 +25,7 @@ default = [
     "mp3",
     "mjpeg",
     "mpeg1video",
+    "theora",
     "aac",
     "celt",
     "g7231",
@@ -48,6 +49,7 @@ mp2 = ["dep:oxideav-mp2"]
 mp3 = ["dep:oxideav-mp3"]
 mjpeg = ["dep:oxideav-mjpeg"]
 mpeg1video = ["dep:oxideav-mpeg1video"]
+theora = ["dep:oxideav-theora"]
 aac = ["dep:oxideav-aac"]
 celt = ["dep:oxideav-celt"]
 g7231 = ["dep:oxideav-g7231"]
@@ -76,6 +78,7 @@ oxideav-mp2 = { workspace = true, optional = true }
 oxideav-mp3 = { workspace = true, optional = true }
 oxideav-mjpeg = { workspace = true, optional = true }
 oxideav-mpeg1video = { workspace = true, optional = true }
+oxideav-theora = { workspace = true, optional = true }
 oxideav-aac = { workspace = true, optional = true }
 oxideav-celt = { workspace = true, optional = true }
 oxideav-g7231 = { workspace = true, optional = true }

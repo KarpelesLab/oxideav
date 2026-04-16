@@ -102,6 +102,7 @@ FLAC/PCM → MP4, MJPEG ↔ AVI).
 | **MJPEG (video)** | ✅ baseline 4:2:0/4:2:2/4:4:4/grey | ✅ baseline 4:2:0/4:2:2/4:4:4 |
 | **FFV1 (video)**  | ✅ self-roundtrip + ffmpeg→us (v3, 4:2:0 / 4:4:4) | ✅ (us→ffmpeg closes a 2-byte footer gap) |
 | **MPEG-1 video**  | ✅ I-frames bit-exact vs ffmpeg (P/B pending) | — |
+| **Theora (video)** | 🔶 headers + Huffman trees (block decode pending) | — |
 
 The Vorbis decoder passes bit-exact roundtrips against lewton and
 matches ffmpeg's output within float rounding. The Vorbis encoder

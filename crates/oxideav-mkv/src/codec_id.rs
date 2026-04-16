@@ -28,6 +28,7 @@ pub fn from_matroska(s: &str, codec_private: &[u8]) -> CodecId {
         "V_MPEG4/ISO/AVC" => "h264",
         "V_MPEGH/ISO/HEVC" => "h265",
         "V_FFV1" => "ffv1",
+        "V_THEORA" => "theora",
         "V_MS/VFW/FOURCC" => return from_bitmapinfoheader(codec_private),
         other => return CodecId::new(format!("mkv:{other}")),
     };

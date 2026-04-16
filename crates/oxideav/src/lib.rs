@@ -56,6 +56,8 @@ pub use oxideav_ogg as ogg;
 pub use oxideav_opus as opus;
 #[cfg(feature = "speex")]
 pub use oxideav_speex as speex;
+#[cfg(feature = "theora")]
+pub use oxideav_theora as theora;
 #[cfg(feature = "vorbis")]
 pub use oxideav_vorbis as vorbis;
 
@@ -163,6 +165,10 @@ impl Registries {
         #[cfg(feature = "speex")]
         {
             oxideav_speex::register(&mut codecs);
+        }
+        #[cfg(feature = "theora")]
+        {
+            oxideav_theora::register(&mut codecs);
         }
 
         Self { codecs, containers }
