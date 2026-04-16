@@ -10,16 +10,16 @@ mod events;
 mod player;
 mod tui;
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 use oxideav::Registries;
+use oxideav_source::SourceRegistry;
 
 use crate::driver::{OutputDriver, PlayerEvent};
 use crate::drivers::sdl2_driver::Sdl2Driver;
-use crate::player::Player;
+use crate::player::{Player, DEFAULT_BUFFER_BYTES};
 
 #[derive(Parser)]
 #[command(
@@ -28,10 +28,10 @@ use crate::player::Player;
     about = "Play a media file via the oxideav library (SDL2 audio + video)"
 )]
 struct Cli {
-    /// Input media file.
-    input: PathBuf,
+    /// Input media URI: a local path, file:// URL, or http(s):// URL.
+    input: String,
 
-    /// Probe the file, print stream info, and exit without touching SDL2.
+    /// Probe the input, print stream info, and exit without touching SDL2.
     #[arg(long)]
     dry_run: bool,
 
@@ -42,6 +42,10 @@ struct Cli {
     /// Force audio-only mode even if the file has a video track.
     #[arg(long)]
     no_video: bool,
+
+    /// Prefetch buffer size in MiB (default 64).
+    #[arg(long, default_value_t = (DEFAULT_BUFFER_BYTES / (1 << 20)) as u32)]
+    buffer_mib: u32,
 }
 
 fn main() -> ExitCode {
@@ -55,19 +59,38 @@ fn main() -> ExitCode {
     }
 }
 
+/// Build the source registry with the file driver and (when compiled in)
+/// HTTP/HTTPS support.
+fn build_sources() -> SourceRegistry {
+    let mut reg = SourceRegistry::with_defaults();
+    #[cfg(feature = "http")]
+    {
+        oxideav::http::register(&mut reg);
+    }
+    reg
+}
+
 fn run(cli: Cli) -> oxideav_core::Result<()> {
     let registries = Registries::with_all_features();
+    let sources = build_sources();
 
     if cli.dry_run {
-        return dry_run(&registries, &cli.input);
+        return dry_run(&registries, &sources, &cli.input);
     }
 
     let want_video = !cli.no_video;
+    let buffer_bytes = (cli.buffer_mib as usize).saturating_mul(1 << 20);
 
-    let (mut play, media) = Player::open(&registries, &cli.input, |sr, ch, video_dims| {
-        let video_dims = if want_video { video_dims } else { None };
-        Sdl2Driver::new(sr, ch, video_dims)
-    })?;
+    let (mut play, media) = Player::open(
+        &registries,
+        &sources,
+        &cli.input,
+        buffer_bytes,
+        |sr, ch, video_dims| {
+            let video_dims = if want_video { video_dims } else { None };
+            Sdl2Driver::new(sr, ch, video_dims)
+        },
+    )?;
 
     if cli.mute {
         play.driver.set_volume(0.0);
@@ -76,7 +99,7 @@ fn run(cli: Cli) -> oxideav_core::Result<()> {
     // Print stream summary to stderr so stdout is free for the TUI.
     eprintln!(
         "oxideplay: playing {} (format: {}){}",
-        cli.input.display(),
+        cli.input,
         media.format_name,
         match &media.duration {
             Some(d) => format!(", duration {}", tui::format_duration(*d)),
@@ -217,9 +240,13 @@ fn run_loop<D: OutputDriver>(
     Ok(())
 }
 
-fn dry_run(registries: &Registries, input: &std::path::Path) -> oxideav_core::Result<()> {
-    let media = player::probe(registries, input)?;
-    println!("Input: {}", input.display());
+fn dry_run(
+    registries: &Registries,
+    sources: &SourceRegistry,
+    input: &str,
+) -> oxideav_core::Result<()> {
+    let media = player::probe(registries, sources, input)?;
+    println!("Input: {input}");
     println!("Format: {}", media.format_name);
     if let Some(d) = media.duration {
         println!("Duration: {}", tui::format_duration(d));
@@ -263,6 +290,6 @@ mod cli_tests {
     fn cli_parses_dry_run() {
         let cli = Cli::try_parse_from(["oxideplay", "--dry-run", "x.mp4"]).unwrap();
         assert!(cli.dry_run);
-        assert_eq!(cli.input.to_string_lossy(), "x.mp4");
+        assert_eq!(cli.input, "x.mp4");
     }
 }

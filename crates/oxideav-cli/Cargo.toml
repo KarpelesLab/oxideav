@@ -12,6 +12,11 @@ description = "Command-line frontend for oxideav"
 name = "oxideav"
 path = "src/main.rs"
 
+[features]
+default = ["http"]
+http = ["oxideav/http"]
+
 [dependencies]
 oxideav = { workspace = true }
+oxideav-source = { workspace = true }
 clap = { workspace = true }

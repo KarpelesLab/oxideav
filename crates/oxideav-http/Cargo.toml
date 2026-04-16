@@ -1,0 +1,15 @@
+[package]
+name = "oxideav-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "HTTP/HTTPS source driver for oxideav (pure-Rust via ureq + rustls + webpki-roots)"
+
+[dependencies]
+oxideav-core = { workspace = true }
+oxideav-container = { workspace = true }
+oxideav-source = { workspace = true }
+ureq = "3"

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use oxideav::container::ReadSeek;
 use oxideav::core::Error;
 use oxideav::Registries;
-use std::fs::File;
+use oxideav_source::{BufferedSource, SourceRegistry};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -16,6 +16,11 @@ use std::process::ExitCode;
     disable_help_subcommand = true
 )]
 struct Cli {
+    /// Prefetch buffer size in MiB for input sources. Default 0 (no
+    /// buffering) — use a positive value for HTTP inputs to absorb jitter.
+    #[arg(long, default_value_t = 0, global = true)]
+    buffer_mib: u32,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -24,27 +29,29 @@ struct Cli {
 enum Command {
     /// List compiled-in codecs and containers.
     List,
-    /// Probe a media file and print stream information.
+    /// Probe a media URI and print stream information.
     Probe {
-        /// Path to the input media file.
-        input: PathBuf,
+        /// Input URI: local path, file:// URL, or http(s):// URL.
+        input: String,
     },
-    /// Remux an input file to a new container (no re-encoding).
+    /// Remux an input to a new container (no re-encoding).
     ///
     /// Only stream copy is supported for now; both sides must use the same codec.
     Remux {
-        input: PathBuf,
+        /// Input URI: local path, file:// URL, or http(s):// URL.
+        input: String,
         output: PathBuf,
         /// Override the output container format. Defaults to file extension.
         #[arg(long)]
         format: Option<String>,
     },
-    /// Decode an input file and re-encode to a new codec.
+    /// Decode an input and re-encode to a new codec.
     ///
     /// Today this is single-stream only. The output codec defaults to a PCM
     /// variant matching the decoded sample format (e.g. FLAC 16-bit → pcm_s16le).
     Transcode {
-        input: PathBuf,
+        /// Input URI: local path, file:// URL, or http(s):// URL.
+        input: String,
         output: PathBuf,
         /// Override the output codec id (e.g. "pcm_s16le", "pcm_f32le").
         #[arg(long)]
@@ -58,15 +65,24 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let registries = Registries::with_all_features();
+    let sources = build_sources();
+    let buffer_bytes = (cli.buffer_mib as usize).saturating_mul(1 << 20);
 
     let result = match cli.command {
         Command::List => cmd_list(&registries),
-        Command::Probe { input } => cmd_probe(&registries, &input),
+        Command::Probe { input } => cmd_probe(&registries, &sources, &input, buffer_bytes),
         Command::Remux {
             input,
             output,
             format,
-        } => cmd_remux(&registries, &input, &output, format.as_deref()),
+        } => cmd_remux(
+            &registries,
+            &sources,
+            &input,
+            &output,
+            format.as_deref(),
+            buffer_bytes,
+        ),
         Command::Transcode {
             input,
             output,
@@ -74,10 +90,12 @@ fn main() -> ExitCode {
             format,
         } => cmd_transcode(
             &registries,
+            &sources,
             &input,
             &output,
             codec.as_deref(),
             format.as_deref(),
+            buffer_bytes,
         ),
     };
 
@@ -88,6 +106,15 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn build_sources() -> SourceRegistry {
+    let mut reg = SourceRegistry::with_defaults();
+    #[cfg(feature = "http")]
+    {
+        oxideav::http::register(&mut reg);
+    }
+    reg
 }
 
 fn cmd_list(reg: &Registries) -> oxideav::core::Result<()> {
@@ -138,11 +165,19 @@ fn cmd_list(reg: &Registries) -> oxideav::core::Result<()> {
     Ok(())
 }
 
-fn cmd_probe(reg: &Registries, input: &Path) -> oxideav::core::Result<()> {
+fn cmd_probe(
+    reg: &Registries,
+    sources: &SourceRegistry,
+    input: &str,
+    buffer_bytes: usize,
+) -> oxideav::core::Result<()> {
+    let (format, file) = detect_input_format(reg, sources, input, buffer_bytes)?;
+    // For local files we report bytes from filesystem metadata; for URI
+    // sources we leave the size undetermined here (could surface from
+    // Source::len() in a follow-up).
     let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-    let (format, file) = detect_input_format(reg, input)?;
     let demuxer = reg.containers.open_demuxer(&format, file)?;
-    println!("Input: {}", input.display());
+    println!("Input: {input}");
     println!("Format: {}", demuxer.format_name());
 
     // Metadata block — ffprobe-style key/value listing. Dedupe identical
@@ -243,11 +278,13 @@ fn format_duration_hhmmss(micros: i64) -> String {
 
 fn cmd_remux(
     reg: &Registries,
-    input: &Path,
+    sources: &SourceRegistry,
+    input: &str,
     output: &Path,
     format_override: Option<&str>,
+    buffer_bytes: usize,
 ) -> oxideav::core::Result<()> {
-    let (in_format, fin) = detect_input_format(reg, input)?;
+    let (in_format, fin) = detect_input_format(reg, sources, input, buffer_bytes)?;
     let out_format = match format_override {
         Some(f) => f.to_owned(),
         None => format_for_output_path(reg, output)?,
@@ -255,7 +292,7 @@ fn cmd_remux(
 
     let mut demuxer = reg.containers.open_demuxer(&in_format, fin)?;
 
-    let fout: Box<dyn oxideav::container::WriteSeek> = Box::new(File::create(output)?);
+    let fout: Box<dyn oxideav::container::WriteSeek> = Box::new(std::fs::File::create(output)?);
     let mut muxer = reg
         .containers
         .open_muxer(&out_format, fout, demuxer.streams())?;
@@ -264,7 +301,7 @@ fn cmd_remux(
     println!(
         "Remuxed {} packet(s) from {} ({}) → {} ({})",
         n,
-        input.display(),
+        input,
         in_format,
         output.display(),
         out_format,
@@ -274,15 +311,17 @@ fn cmd_remux(
 
 fn cmd_transcode(
     reg: &Registries,
-    input: &Path,
+    sources: &SourceRegistry,
+    input: &str,
     output: &Path,
     codec_override: Option<&str>,
     format_override: Option<&str>,
+    buffer_bytes: usize,
 ) -> oxideav::core::Result<()> {
     use oxideav::core::SampleFormat;
     use oxideav::pipeline::{transcode_simple, StreamPlan};
 
-    let (in_format, fin) = detect_input_format(reg, input)?;
+    let (in_format, fin) = detect_input_format(reg, sources, input, buffer_bytes)?;
     let out_format = match format_override {
         Some(f) => f.to_owned(),
         None => format_for_output_path(reg, output)?,
@@ -316,7 +355,7 @@ fn cmd_transcode(
         output_codec: codec.clone(),
     };
 
-    let fout: Box<dyn oxideav::container::WriteSeek> = Box::new(File::create(output)?);
+    let fout: Box<dyn oxideav::container::WriteSeek> = Box::new(std::fs::File::create(output)?);
     let registries_containers = &reg.containers;
     let out_format_owned = out_format.clone();
     let muxer_open = move |streams: &[oxideav::core::StreamInfo]| {
@@ -326,7 +365,7 @@ fn cmd_transcode(
     let stats = transcode_simple(&mut *demuxer, muxer_open, &reg.codecs, &plan)?;
     println!(
         "Transcoded {} → {} ({}): {} pkts in, {} frames decoded, {} pkts out",
-        input.display(),
+        input,
         output.display(),
         codec,
         stats.packets_in,
@@ -345,12 +384,29 @@ fn cmd_transcode(
 /// the cursor positioned at byte 0 ready for `open_demuxer`.
 fn detect_input_format(
     reg: &Registries,
-    path: &Path,
+    sources: &SourceRegistry,
+    input: &str,
+    buffer_bytes: usize,
 ) -> oxideav::core::Result<(String, Box<dyn ReadSeek>)> {
-    let mut file: Box<dyn ReadSeek> = Box::new(File::open(path)?);
-    let ext = path.extension().and_then(|e| e.to_str());
-    let format = reg.containers.probe_input(&mut *file, ext)?;
-    Ok((format, file))
+    let raw = sources.open(input)?;
+    let handle: Box<dyn ReadSeek> = if buffer_bytes > 0 {
+        Box::new(BufferedSource::new(raw, buffer_bytes)?)
+    } else {
+        raw
+    };
+    let mut handle = handle;
+    let ext = ext_from_uri(input);
+    let format = reg.containers.probe_input(&mut *handle, ext.as_deref())?;
+    Ok((format, handle))
+}
+
+/// Best-effort extension hint from a URI: takes everything after the
+/// last `/`-segment's `.`, ignoring `?…` query strings.
+fn ext_from_uri(uri: &str) -> Option<String> {
+    let last = uri.rsplit('/').next().unwrap_or(uri);
+    let last = last.split('?').next().unwrap_or(last);
+    let dot = last.rfind('.')?;
+    Some(last[dot + 1..].to_ascii_lowercase())
 }
 
 /// Pick a container format for an output path. The file doesn't exist

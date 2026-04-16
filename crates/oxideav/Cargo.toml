@@ -79,12 +79,16 @@ av1 = ["dep:oxideav-av1"]
 h263 = ["dep:oxideav-h263"]
 vp8 = ["dep:oxideav-vp8"]
 audio_filter = ["dep:oxideav-audio-filter"]
+# HTTP/HTTPS source driver. Off by default — opt in to link ureq + rustls.
+http = ["dep:oxideav-http"]
 
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }
 oxideav-container = { workspace = true }
 oxideav-pipeline = { workspace = true }
+oxideav-source = { workspace = true }
+oxideav-http = { workspace = true, optional = true }
 oxideav-basic = { workspace = true, optional = true }
 oxideav-ogg = { workspace = true, optional = true }
 oxideav-vorbis = { workspace = true, optional = true }

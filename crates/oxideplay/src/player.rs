@@ -4,13 +4,13 @@
 //! loop: read packet → decode → push frames to driver → poll events →
 //! sleep if buffer is getting full. Audio is the master clock.
 
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use oxideav::Registries;
 use oxideav_codec::Decoder;
 use oxideav_container::{Demuxer, ReadSeek};
 use oxideav_core::{AudioFrame, CodecParameters, Error, Frame, MediaType, Result, StreamInfo};
+use oxideav_source::{BufferedSource, SourceRegistry};
 
 use crate::driver::{OutputDriver, PlayerEvent, SeekDir};
 
@@ -42,25 +42,49 @@ pub struct OpenedMedia {
     pub format_name: String,
 }
 
-/// Detect a file's container by reading its bytes and consulting the
-/// registered probes. Falls back to the extension only if no probe
-/// scores positively. Returns the format name plus an open file handle
-/// positioned at byte 0, ready for `open_demuxer`.
+/// Default prefetch buffer for playback (bytes). Sized to absorb a few
+/// seconds of typical home-broadband jitter on HD streams.
+pub const DEFAULT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
+/// Open `input` (URI or bare path) through the source registry, wrap in
+/// a [`BufferedSource`] of `buffer_bytes`, then probe the container.
+/// Returns the detected format name plus the buffered handle, ready
+/// for `open_demuxer`.
 fn detect_input_format(
     registries: &Registries,
-    input: &Path,
+    sources: &SourceRegistry,
+    input: &str,
+    buffer_bytes: usize,
 ) -> Result<(String, Box<dyn ReadSeek>)> {
-    let mut file: Box<dyn ReadSeek> = Box::new(std::fs::File::open(input)?);
-    let ext = input.extension().and_then(|e| e.to_str());
-    let format = registries.containers.probe_input(&mut *file, ext)?;
+    let raw = sources.open(input)?;
+    let buffered = BufferedSource::new(raw, buffer_bytes)?;
+    let mut handle: Box<dyn ReadSeek> = Box::new(buffered);
+    let ext = ext_from_uri(input);
+    let format = registries
+        .containers
+        .probe_input(&mut *handle, ext.as_deref())?;
     let _ = Error::FormatNotFound; // keep the import live; no fallback needed.
-    Ok((format, file))
+    Ok((format, handle))
 }
 
-/// Probe the input file and return its streams without touching SDL2.
+/// Best-effort extension hint from a URI: takes everything after the
+/// last `/`-segment's `.`, ignoring `?…` query strings.
+fn ext_from_uri(uri: &str) -> Option<String> {
+    let last_segment = uri.rsplit('/').next().unwrap_or(uri);
+    let last_segment = last_segment.split('?').next().unwrap_or(last_segment);
+    let dot = last_segment.rfind('.')?;
+    Some(last_segment[dot + 1..].to_ascii_lowercase())
+}
+
+/// Probe the input and return its streams without touching SDL2.
 /// Used for `--dry-run` and for determining whether to open a video window.
-pub fn probe(registries: &Registries, input: &Path) -> Result<OpenedMedia> {
-    let (format, file) = detect_input_format(registries, input)?;
+pub fn probe(
+    registries: &Registries,
+    sources: &SourceRegistry,
+    input: &str,
+) -> Result<OpenedMedia> {
+    // Probe doesn't need a fat buffer — keep memory low.
+    let (format, file) = detect_input_format(registries, sources, input, 1 << 20)?;
     let demuxer = registries.containers.open_demuxer(&format, file)?;
     let (audio, video) = pick_streams(demuxer.streams());
     let duration = audio
@@ -103,13 +127,15 @@ impl<D: OutputDriver> Player<D> {
     /// the caller pick headless vs. SDL2 etc.
     pub fn open<F>(
         registries: &Registries,
-        input: &Path,
+        sources: &SourceRegistry,
+        input: &str,
+        buffer_bytes: usize,
         build_driver: F,
     ) -> Result<(Self, OpenedMedia)>
     where
         F: FnOnce(u32, u16, Option<(u32, u32)>) -> Result<D>,
     {
-        let (format, file) = detect_input_format(registries, input)?;
+        let (format, file) = detect_input_format(registries, sources, input, buffer_bytes)?;
         let demuxer = registries.containers.open_demuxer(&format, file)?;
         let (audio, video) = pick_streams(demuxer.streams());
         let duration = audio

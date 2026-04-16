@@ -37,6 +37,8 @@ members = [
     "crates/oxideav-g729",
     "crates/oxideav-gsm",
     "crates/oxideav-speex",
+    "crates/oxideav-source",
+    "crates/oxideav-http",
     "crates/oxideav",
     "crates/oxideav-cli",
     "crates/oxideplay",
@@ -87,6 +89,8 @@ oxideav-g728 = { path = "crates/oxideav-g728", version = "0.0.1" }
 oxideav-g729 = { path = "crates/oxideav-g729", version = "0.0.1" }
 oxideav-gsm = { path = "crates/oxideav-gsm", version = "0.0.1" }
 oxideav-speex = { path = "crates/oxideav-speex", version = "0.0.1" }
+oxideav-source = { path = "crates/oxideav-source", version = "0.0.1" }
+oxideav-http = { path = "crates/oxideav-http", version = "0.0.1" }
 oxideav = { path = "crates/oxideav", version = "0.0.1" }
 
 thiserror = "1"

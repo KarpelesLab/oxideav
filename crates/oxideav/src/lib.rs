@@ -13,6 +13,10 @@ pub use oxideav_codec as codec;
 pub use oxideav_container as container;
 pub use oxideav_core as core;
 pub use oxideav_pipeline as pipeline;
+pub use oxideav_source as source;
+
+#[cfg(feature = "http")]
+pub use oxideav_http as http;
 
 #[cfg(feature = "aac")]
 pub use oxideav_aac as aac;

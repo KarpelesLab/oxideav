@@ -13,11 +13,18 @@ description = "Reference media player for the oxideav framework (SDL2 + crosster
 # rust-sdl2 / sdl2-sys at build time — this keeps SDL2 a soft dependency
 # (the binary still builds and runs in headless mode without it). The
 # library half of oxideav stays 100% pure Rust.
+[features]
+default = ["http"]
+# Pulls oxideav-http through the aggregator. Disable to drop the
+# ureq/rustls dependency tree from the player binary.
+http = ["oxideav/http"]
+
 [dependencies]
 oxideav = { workspace = true }
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }
 oxideav-container = { workspace = true }
+oxideav-source = { workspace = true }
 clap = { workspace = true }
 crossterm = "0.28"
 libloading = "0.8"
