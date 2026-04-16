@@ -911,14 +911,19 @@ fn write_mba(bw: &mut BitWriter, mut incr: u32) -> Result<()> {
 /// Search range in integer pels for forward ME. ±8 covers the spec range
 /// |motion_code| ≤ 16 with f_code=1 (16 half-pel = 8 integer pel). The ME
 /// adds a small SAD bias proportional to |MV| so that nearly-static MBs
-/// are encoded as MV=(0,0), which favours skips.
+/// are encoded as MV=(0,0), which favours skips. Half-pel refinement below
+/// is only attempted when the integer-pel result is within ±7 int pels so
+/// the refined |mv| never exceeds 15 half-pel (inside ±16).
 const ME_RANGE_PEL: i32 = 8;
 
-/// Full-search block matching. Returns:
-///   * (best_mv_x, best_mv_y) in **half-pel** units (always even because we
-///     only search integer pels).
-///   * SAD at best MV.
-///   * SAD at MV (0,0).
+/// Full-search block matching with half-pel refinement. Returns:
+///   * (best_mv_x, best_mv_y) in **half-pel** units. Integer-pel searches
+///     yield even values; the half-pel refinement stage may add ±1 so the
+///     returned vector can be odd.
+///   * SAD at best MV (computed with half-pel bilinear interpolation where
+///     applicable — i.e. the SAD is comparable between integer and
+///     fractional candidates).
+///   * SAD at MV (0,0) — used to decide the "true skip" case.
 ///   * SAD as if intra (rough estimate using only luma sample variance).
 fn mb_motion_search(
     enc: &Mpeg1VideoEncoder,
@@ -949,7 +954,8 @@ fn mb_motion_search(
     let rs = enc.ref_y_stride as i32;
     let rh = (enc.ref_y.len() / enc.ref_y_stride) as i32;
 
-    let sad_at = |dx: i32, dy: i32| -> u32 {
+    // Integer-pel SAD: reference patch at (x0+dx, y0+dy) with edge clamp.
+    let sad_int_at = |dx: i32, dy: i32| -> u32 {
         let mut sum: u32 = 0;
         for j in 0..16i32 {
             for i in 0..16i32 {
@@ -963,21 +969,87 @@ fn mb_motion_search(
         sum
     };
 
-    let mut best: ((i32, i32), u32) = ((0, 0), sad_at(0, 0));
-    let sad_zero = best.1;
-    // Bias factor: cost in SAD units we charge per unit of |MV|. Higher =
-    // stronger preference for MV=(0,0). 32 ≈ "an MV-of-1 has to save 32
-    // SAD units to be worthwhile" which is conservative — we need decisive
-    // wins from MC because each non-zero MV costs ≥ 11 bits in the
-    // bitstream and adds quantisation error chains.
-    let bias_per_unit: u32 = 16;
+    // Half-pel SAD using `motion::predict_block` to build the bilinear-
+    // interpolated reference patch — matches what the decoder will
+    // reconstruct exactly.
+    let sad_half_at = |mv_x_half: i32, mv_y_half: i32| -> u32 {
+        let mut pred = [0u8; 16 * 16];
+        crate::motion::predict_block(
+            ref_y,
+            enc.ref_y_stride,
+            rs,
+            rh,
+            x0,
+            y0,
+            mv_x_half,
+            mv_y_half,
+            16,
+            &mut pred,
+            16,
+        );
+        let mut sum: u32 = 0;
+        for j in 0..16 {
+            for i in 0..16 {
+                let c = cur[j * 16 + i];
+                let r = pred[j * 16 + i] as i32;
+                sum += (c - r).unsigned_abs();
+            }
+        }
+        sum
+    };
+
+    // Integer-pel full search. Track (mv_int_x, mv_int_y) and SAD here —
+    // convert to half-pel only at the end.
+    let mut best_int: ((i32, i32), u32) = ((0, 0), sad_int_at(0, 0));
+    let sad_zero = best_int.1;
+    // Bias factor: cost in SAD units we charge per unit of |MV| (in integer-
+    // pel units). Higher = stronger preference for MV=(0,0). We need decisive
+    // wins from MC because each non-zero MV costs ≥ 11 bits in the bitstream
+    // and adds quantisation error chains.
+    let bias_per_pel: u32 = 16;
     for dy in -ME_RANGE_PEL..=ME_RANGE_PEL {
         for dx in -ME_RANGE_PEL..=ME_RANGE_PEL {
-            let s = sad_at(dx, dy);
-            let bias = (dx.unsigned_abs() + dy.unsigned_abs()) * bias_per_unit;
-            let best_bias = (best.0 .0.unsigned_abs() + best.0 .1.unsigned_abs()) * bias_per_unit;
-            if s + bias < best.1 + best_bias {
-                best = ((dx, dy), s);
+            let s = sad_int_at(dx, dy);
+            let bias = (dx.unsigned_abs() + dy.unsigned_abs()) * bias_per_pel;
+            let best_bias =
+                (best_int.0 .0.unsigned_abs() + best_int.0 .1.unsigned_abs()) * bias_per_pel;
+            if s + bias < best_int.1 + best_bias {
+                best_int = ((dx, dy), s);
+            }
+        }
+    }
+    // Convert integer-pel best to half-pel units.
+    let mut best: ((i32, i32), u32) = ((best_int.0 .0 * 2, best_int.0 .1 * 2), best_int.1);
+
+    // Half-pel refinement: test the 8 neighbours of the best integer-pel MV
+    // at ±1 half-pel offsets using bilinear-interpolated reference patches
+    // (exactly what the decoder will reconstruct). Stay within |mv| ≤ 15
+    // half-pel (one below the ±16 spec limit).
+    //
+    // Half-pel prediction bilinearly smooths the reference; for truly
+    // integer-pel motion this is a net loss. Apply a "win threshold" so a
+    // fractional candidate only gets picked when it wins by a meaningful
+    // margin — avoiding drift accumulation on integer-motion content.
+    let bias_per_half: u32 = 8;
+    let half_pel_win: u32 = 32;
+    let (mut bx, mut by) = best.0;
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let mx = bx + dx;
+            let my = by + dy;
+            if mx.abs() > 15 || my.abs() > 15 {
+                continue;
+            }
+            let s = sad_half_at(mx, my);
+            let bias = (mx.unsigned_abs() + my.unsigned_abs()) * bias_per_half;
+            let best_bias = (bx.unsigned_abs() + by.unsigned_abs()) * bias_per_half;
+            if s + bias + half_pel_win < best.1 + best_bias {
+                best = ((mx, my), s);
+                bx = mx;
+                by = my;
             }
         }
     }
@@ -994,9 +1066,7 @@ fn mb_motion_search(
         intra_dev += (*c - mean).unsigned_abs();
     }
 
-    // Convert mv from integer pels to half-pel units (×2).
-    let mv = (best.0 .0 * 2, best.0 .1 * 2);
-    (mv, best.1, sad_zero, intra_dev)
+    (best.0, best.1, sad_zero, intra_dev)
 }
 
 fn pick_mb_mode_p(best_mv: (i32, i32), sad_mc: u32, sad_zero: u32, sad_intra: u32) -> PMbMode {
@@ -1171,11 +1241,14 @@ fn encode_one_mv_component(bw: &mut BitWriter, predictor: &mut i32, target: i32)
         }
     }
     // If the requested target isn't representable from the current predictor,
-    // fall back to delta=0 (motion_code=0). The reconstructed MV will equal
-    // the predictor — caller is expected to recompute the prediction with
-    // the *actual* MV that gets written. We propagate this via the
-    // predictor update so the rest of the encoder stays consistent.
-    let delta = chosen.unwrap_or(0);
+    // pick the representable delta closest to `raw` (clamped to
+    // ±MAX_MOTION_CODE). This is still a lossy choice — the caller's
+    // motion-compensated prediction will not match what the decoder
+    // reconstructs — so we update the predictor to the *actual*
+    // reconstructed MV and rely on the caller having already committed the
+    // chosen MV upstream. In practice this path is rare because ME clamps
+    // |mv| to ±15 half-pel and skip-runs reset the predictor.
+    let delta = chosen.unwrap_or_else(|| raw.clamp(-MAX_MOTION_CODE, MAX_MOTION_CODE));
 
     // motion_code = delta. abs(delta) is the table value (0..=16); sign goes
     // separately when nonzero.
