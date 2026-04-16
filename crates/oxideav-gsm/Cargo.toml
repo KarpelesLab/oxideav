@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Pure-Rust GSM Full Rate (ETSI 06.10, RPE-LTP) speech decoder"
+description = "Pure-Rust GSM Full Rate (ETSI 06.10, RPE-LTP) speech codec"
 
 [dependencies]
 oxideav-core = { workspace = true }

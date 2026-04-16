@@ -49,6 +49,111 @@ pub fn shl(a: i16, n: u32) -> i16 {
     saturate_i32_to_i16(v)
 }
 
+/// `GSM_MULT(a, b) = (a*b) >> 15` (no rounding). Saturates to 16-bit.
+#[inline]
+pub fn mult(a: i16, b: i16) -> i16 {
+    if a == MIN_WORD && b == MIN_WORD {
+        MAX_WORD
+    } else {
+        saturate_i32_to_i16((a as i32 * b as i32) >> 15)
+    }
+}
+
+/// Absolute value with saturation (|MIN_WORD| → MAX_WORD).
+#[inline]
+pub fn abs16(a: i16) -> i16 {
+    if a == MIN_WORD {
+        MAX_WORD
+    } else if a < 0 {
+        -a
+    } else {
+        a
+    }
+}
+
+/// Saturating 32-bit add.
+#[inline]
+pub fn l_add(a: i32, b: i32) -> i32 {
+    a.saturating_add(b)
+}
+
+/// Saturating 32-bit subtract.
+#[inline]
+#[allow(dead_code)]
+pub fn l_sub(a: i32, b: i32) -> i32 {
+    a.saturating_sub(b)
+}
+
+/// Number of left-shifts needed to normalise a non-zero 32-bit signed value
+/// to the [2^30, 2^31) magnitude range. For negative values it works on
+/// `!a`. Returns 0..=31. Matches libgsm's `gsm_norm`.
+#[inline]
+pub fn norm32(a: i32) -> u32 {
+    if a == 0 {
+        return 0; // Undefined in spec; libgsm asserts, we return 0.
+    }
+    if a < 0 {
+        if a <= -1_073_741_824 {
+            return 0;
+        }
+        let x = !a as u32;
+        x.leading_zeros().saturating_sub(1)
+    } else {
+        (a as u32).leading_zeros().saturating_sub(1)
+    }
+}
+
+/// Integer division `div = floor(num * 2^15 / denum)` for `0 <= num <= denum`,
+/// returning a 15-bit result. Matches libgsm's `gsm_div`.
+#[inline]
+pub fn div16(num: i16, denum: i16) -> i16 {
+    debug_assert!(num >= 0);
+    debug_assert!(denum >= num);
+    if num == 0 {
+        return 0;
+    }
+    let mut l_num = num as i32;
+    let l_den = denum as i32;
+    let mut div: i16 = 0;
+    for _ in 0..15 {
+        div <<= 1;
+        l_num <<= 1;
+        if l_num >= l_den {
+            l_num -= l_den;
+            div += 1;
+        }
+    }
+    div
+}
+
+/// Arithmetic shift-right with rounding semantics matching C's `>>` on
+/// two's-complement; used as a readable stand-in for libgsm's `SASR(a, n)`.
+#[inline]
+pub fn sasr_i16(a: i16, n: u32) -> i16 {
+    if n >= 16 {
+        if a < 0 {
+            -1
+        } else {
+            0
+        }
+    } else {
+        a >> n
+    }
+}
+
+#[inline]
+pub fn sasr_i32(a: i32, n: u32) -> i32 {
+    if n >= 32 {
+        if a < 0 {
+            -1
+        } else {
+            0
+        }
+    } else {
+        a >> n
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

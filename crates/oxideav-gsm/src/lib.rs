@@ -1,13 +1,14 @@
-//! GSM Full Rate (ETSI EN 300 961 / 06.10, RPE-LTP, 13 kbit/s) decoder.
+//! GSM Full Rate (ETSI EN 300 961 / 06.10, RPE-LTP, 13 kbit/s) codec.
 //!
-//! Scope: a full pure-Rust decoder — bit-unpacker, LAR/LTP/RPE decode,
-//! short-term synthesis filter, and post-processing — wired into the
-//! `oxideav_codec::Decoder` trait. Two framings are registered:
+//! Scope: a full pure-Rust decoder + encoder — bit-unpacker, LAR/LTP/RPE
+//! decode and encode, short-term synthesis / analysis filters, and
+//! post-/pre-processing — wired into the `oxideav_codec::Decoder` and
+//! `Encoder` traits. Two framings are registered for each direction:
 //!
 //! - `gsm`    : the canonical ETSI 33-byte frame (4-bit 0xD magic + 260 bits).
 //! - `gsm_ms` : Microsoft's 65-byte "WAV-49" packing of two standard frames.
 //!
-//! Each standard frame yields 160 S16 PCM samples at 8 kHz mono.
+//! Each standard frame carries 160 S16 PCM samples at 8 kHz mono.
 //!
 //! The implementation follows the ETSI 06.10 spec and the public-domain
 //! libgsm structure (Jutta Degener). Math is all fixed-point i16/i32
@@ -22,6 +23,7 @@
 
 pub mod bitreader;
 pub mod decoder;
+pub mod encoder;
 pub mod frame;
 mod math;
 pub mod synthesis;
@@ -33,14 +35,20 @@ use oxideav_core::{CodecCapabilities, CodecId};
 pub const CODEC_ID_STR: &str = "gsm";
 pub const CODEC_ID_MS_STR: &str = "gsm_ms";
 
-/// Register both the standard and Microsoft GSM framings.
+/// Register both the standard and Microsoft GSM framings — each with a
+/// decoder and an encoder implementation.
 pub fn register(reg: &mut CodecRegistry) {
     let caps_std = CodecCapabilities::audio("gsm_sw")
         .with_lossy(true)
         .with_intra_only(false)
         .with_max_channels(1)
         .with_max_sample_rate(8_000);
-    reg.register_decoder_impl(CodecId::new(CODEC_ID_STR), caps_std, decoder::make_decoder);
+    reg.register_decoder_impl(
+        CodecId::new(CODEC_ID_STR),
+        caps_std.clone(),
+        decoder::make_decoder,
+    );
+    reg.register_encoder_impl(CodecId::new(CODEC_ID_STR), caps_std, encoder::make_encoder);
 
     let caps_ms = CodecCapabilities::audio("gsm_ms_sw")
         .with_lossy(true)
@@ -49,8 +57,13 @@ pub fn register(reg: &mut CodecRegistry) {
         .with_max_sample_rate(8_000);
     reg.register_decoder_impl(
         CodecId::new(CODEC_ID_MS_STR),
-        caps_ms,
+        caps_ms.clone(),
         decoder::make_decoder,
+    );
+    reg.register_encoder_impl(
+        CodecId::new(CODEC_ID_MS_STR),
+        caps_ms,
+        encoder::make_encoder,
     );
 }
 

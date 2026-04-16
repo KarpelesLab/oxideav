@@ -57,27 +57,33 @@ impl<'a> BitReader<'a> {
     }
 }
 
-/// MSB-first bit writer companion — not exposed but handy in tests.
-#[cfg(test)]
+/// MSB-first bit writer companion.
+///
+/// Used by the encoder to pack the 260 bits of a GSM Full Rate frame into
+/// 33 bytes in the same order the [`BitReader`] consumes them. Fields are
+/// written big-endian within each byte.
 pub struct BitWriter {
     pub data: Vec<u8>,
     pos: usize,
 }
 
-#[cfg(test)]
 impl Default for BitWriter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
 impl BitWriter {
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
             pos: 0,
         }
+    }
+
+    /// Number of bits already written.
+    pub fn bit_position(&self) -> usize {
+        self.pos
     }
 
     pub fn write(&mut self, value: u16, n: u32) {
