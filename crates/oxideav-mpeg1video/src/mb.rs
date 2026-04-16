@@ -259,13 +259,23 @@ pub fn decode_slice(
             state.last_had_backward = mb_type_flags.motion_backward;
         }
 
-        // Peek ahead: if next 23 bits are zero (start of next start code) we
-        // stop. Otherwise loop for the next MB.
-        if br.bits_remaining() < 24 {
+        // Slice termination: loop until the next start code. The next
+        // start code is `0x000001XX` (preceded optionally by stuffing zero
+        // bytes), so we peek up to the next 23 bits (or fewer near the
+        // tail) and break only if all the bits we can see are zero.
+        //
+        // Also break when we've reached the right edge of the row — the
+        // next MB would be in the next slice/row.
+        if mb_addr + 1 >= (mb_row + 1) * mb_width {
             break;
         }
-        let peek = br.peek_u32(23)?;
+        let avail = br.bits_remaining().min(23) as u32;
+        if avail == 0 {
+            break;
+        }
+        let peek = br.peek_u32(avail)?;
         if peek == 0 {
+            // All trailing bits are zero — at the start of a start code.
             break;
         }
     }

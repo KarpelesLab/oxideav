@@ -11,7 +11,12 @@
 //!   display-order PTS reconstruction from temporal_reference + GOP anchors.
 //! * Milestone 5 — I-frame encoder: sequence / GOP / picture headers,
 //!   forward DCT, intra quantisation, DC differential + AC run/level VLC,
-//!   one-slice-per-row output. P/B encode is explicitly out of scope.
+//!   one-slice-per-row output.
+//! * Milestone 6 — P-frame encoder: forward block-matching motion estimation
+//!   (integer-pel ±7), MV differential coding via Table B-10, MB types
+//!   (skip / forward / forward+coded / intra fallback), inter quant + Table
+//!   B-14 first-coeff VLC, and CBP encoding via Table B-9. B-frames remain
+//!   out of scope.
 //!
 //! This crate intentionally has no runtime dependencies beyond `oxideav-core`
 //! and `oxideav-codec`.
@@ -44,7 +49,7 @@ pub fn register(reg: &mut CodecRegistry) {
         .with_max_size(4096, 4096);
     let id = CodecId::new(CODEC_ID_STR);
     reg.register_decoder_impl(id.clone(), caps.clone(), decoder::make_decoder);
-    // The encoder is intra-only (only I-pictures are produced).
-    let enc_caps = caps.with_intra_only(true);
+    // Encoder produces I + P pictures (no B in v1).
+    let enc_caps = caps.with_intra_only(false);
     reg.register_encoder_impl(id, enc_caps, encoder::make_encoder);
 }
