@@ -1,8 +1,9 @@
 //! Theora video decoder.
 //!
 //! Status: header parsing (identification + comment + setup) from extradata,
-//! codec parameter population, frame-header classification, and full **intra
-//! frame** decode. Inter frames still return `Error::Unsupported`.
+//! codec parameter population, frame-header classification, full **intra
+//! frame** decode, and **inter (P-frame)** decode with motion compensation
+//! against the previous reference frame and the golden frame.
 
 use std::collections::VecDeque;
 
@@ -14,7 +15,9 @@ use oxideav_core::{
 
 use crate::bitreader::BitReader;
 use crate::block::IntraFrameDecoder;
+use crate::coded_order::FrameLayout;
 use crate::headers::{parse_headers_from_extradata, Headers, PixelFormat};
+use crate::inter::Mode;
 
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     let headers = if params.extradata.is_empty() {
@@ -29,6 +32,8 @@ pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
         pending_pts: None,
         pending_tb: TimeBase::new(1, 90_000),
         eof: false,
+        prev_ref: None,
+        golden_ref: None,
     }))
 }
 
@@ -39,6 +44,11 @@ pub struct TheoraDecoder {
     pending_pts: Option<i64>,
     pending_tb: TimeBase,
     eof: bool,
+    /// Previous reconstructed frame (post-loop-filter) used as motion-comp
+    /// reference for inter frames (RFI=1).
+    prev_ref: Option<[Vec<u8>; 3]>,
+    /// Golden reference frame; updated only on keyframes.
+    golden_ref: Option<[Vec<u8>; 3]>,
 }
 
 /// Theora "frame type": false = intra, true = inter (spec §7.1).
@@ -94,52 +104,89 @@ impl TheoraDecoder {
     }
 
     fn decode_frame(&mut self, packet: &[u8]) -> Result<()> {
-        let Some(headers) = self.headers.as_ref() else {
-            return Err(Error::invalid(
-                "Theora frame packet before headers were parsed",
-            ));
-        };
-        let kind = classify_packet(packet)?;
-        match kind {
-            PacketKind::Frame(FrameType::Inter) => {
-                return Err(Error::unsupported("theora inter-frame decode: follow-up"));
+        let headers_ptr: *const Headers = match self.headers.as_ref() {
+            Some(h) => h as *const _,
+            None => {
+                return Err(Error::invalid(
+                    "Theora frame packet before headers were parsed",
+                ))
             }
-            PacketKind::Frame(FrameType::Intra) => {}
+        };
+        // SAFETY: `headers` outlives this function call; we only need a shared
+        // reference for the duration of decode_frame.
+        let headers: &Headers = unsafe { &*headers_ptr };
+
+        let kind = classify_packet(packet)?;
+        let frame_type = match kind {
+            PacketKind::Frame(ft) => ft,
             _ => return Err(Error::invalid("Theora: expected frame packet")),
-        }
+        };
+
         let mut br = BitReader::new(packet);
-        // §7.1 frame header prelude (already consumed 2 bits by classify).
+        // §7.1 frame header prelude.
         let marker = br.read_bit()?;
         if marker {
             return Err(Error::invalid("Theora: frame marker non-zero"));
         }
-        let ftype = br.read_bit()?;
-        if ftype {
-            // inter, already handled above; defensive.
-            return Err(Error::unsupported("theora inter-frame decode: follow-up"));
-        }
-        let mut intra = IntraFrameDecoder::new(headers);
-        intra.read_intra_frame_header(&mut br)?;
-        intra.fill_bcoded_intra();
-        // §7.4 macro-block modes: intra frame — all INTRA (implicit).
-        // §7.6 qii.
-        intra.read_qiis(&mut br)?;
-        // §7.7.3 DCT coefficients.
-        intra.decode_coefficients(&mut br)?;
-        // §7.8.2 undo DC prediction.
-        intra.undo_dc_prediction();
-        // §7.9.4 reconstruction.
-        let mut planes_buf = intra.reconstruct();
-        // §7.10 loop filter.
-        intra.loop_filter(&mut planes_buf);
+        let _ftype = br.read_bit()?;
 
-        // Build VideoFrame. Crop to picture region: picw/pich/picx/picy
-        // (the spec's picy is from the BOTTOM).
+        let mut frame = IntraFrameDecoder::new(headers);
+        match frame_type {
+            FrameType::Intra => {
+                frame.is_inter = false;
+                frame.read_intra_frame_header(&mut br)?;
+                frame.fill_bcoded_intra();
+                // §7.4 macro-block modes: intra frame — all INTRA (implicit).
+                for m in frame.modes.iter_mut() {
+                    *m = Mode::Intra;
+                }
+                frame.read_qiis(&mut br)?;
+                frame.decode_coefficients(&mut br)?;
+                frame.undo_dc_prediction();
+                let mut planes_buf = frame.reconstruct();
+                frame.loop_filter(&mut planes_buf);
+                self.emit_frame(headers, &planes_buf)?;
+                // Keyframe updates BOTH golden and prev refs.
+                self.golden_ref = Some(planes_buf.clone());
+                self.prev_ref = Some(planes_buf);
+            }
+            FrameType::Inter => {
+                if self.prev_ref.is_none() {
+                    return Err(Error::invalid("Theora: inter frame without prior keyframe"));
+                }
+                frame.is_inter = true;
+                frame.read_inter_frame_header(&mut br)?;
+                // §7.3.2/§7.3.3 BCODED + SBPMs.
+                crate::inter::read_inter_bcoded(&mut br, &frame.layout, &mut frame.bcoded)?;
+                // §7.3.4 macro-block modes.
+                read_inter_modes(&mut br, &mut frame)?;
+                // §7.3.5 motion vectors.
+                read_inter_mvs(&mut br, &mut frame)?;
+                // §7.6 qii.
+                frame.read_qiis(&mut br)?;
+                // §7.7.3 DCT coefficients.
+                frame.decode_coefficients(&mut br)?;
+                // §7.8.2 undo DC prediction.
+                frame.undo_dc_prediction();
+                // §7.9.4 reconstruction with motion compensation.
+                let prev = self.prev_ref.as_ref().unwrap();
+                let golden = self.golden_ref.as_ref();
+                let mut planes_buf = frame.reconstruct_with_refs(Some(prev), golden);
+                // §7.10 loop filter.
+                frame.loop_filter(&mut planes_buf);
+                self.emit_frame(headers, &planes_buf)?;
+                self.prev_ref = Some(planes_buf);
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_frame(&mut self, headers: &Headers, planes_buf: &[Vec<u8>; 3]) -> Result<()> {
         let id = &headers.identification;
-        let (cropped_planes, out_w, out_h) = crop_to_picture(id, &planes_buf);
+        let (cropped_planes, out_w, out_h) = crop_to_picture(id, planes_buf);
         let core_fmt = pixel_format_to_core(id.pf);
         let planes = build_video_planes(&cropped_planes, out_w, out_h, id.pf);
-        let frame = VideoFrame {
+        let video = VideoFrame {
             format: core_fmt,
             width: out_w,
             height: out_h,
@@ -147,9 +194,224 @@ impl TheoraDecoder {
             time_base: self.pending_tb,
             planes,
         };
-        self.ready_frames.push_back(frame);
+        self.ready_frames.push_back(video);
         Ok(())
     }
+}
+
+/// Macroblock-Hilbert order within one super-block (spec Figure 2.6).
+/// Order: bottom-left, top-left, top-right, bottom-right.
+/// In Figure 2.6 the diagram "1 2 / 0 3" labels the position with its order:
+///   (0, 0) lower-left = order 0
+///   (0, 1) upper-left = order 1
+///   (1, 1) upper-right = order 2
+///   (1, 0) lower-right = order 3
+const MB_HILBERT: [(u32, u32); 4] = [(0, 0), (0, 1), (1, 1), (1, 0)];
+
+/// Iterate macroblocks in Theora coded order. For each MB yields its
+/// (mbx, mby) in luma-MB coordinates (i.e. half of luma-block coords).
+fn for_each_mb<F: FnMut(u32, u32) -> Result<()>>(layout: &FrameLayout, mut f: F) -> Result<()> {
+    let plane = &layout.planes[0];
+    let nbw = plane.nbw;
+    let nbh = plane.nbh;
+    // Super-blocks in luma plane.
+    let sbw = nbw.div_ceil(4);
+    let sbh = nbh.div_ceil(4);
+    let mbw = nbw / 2;
+    let mbh = nbh / 2;
+    for sby in 0..sbh {
+        for sbx in 0..sbw {
+            // 4 MBs per SB (2x2). MB coords inside SB: from MB_HILBERT.
+            for &(dx, dy) in &MB_HILBERT {
+                let mbx = sbx * 2 + dx;
+                let mby = sby * 2 + dy;
+                if mbx < mbw && mby < mbh {
+                    f(mbx, mby)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decode per-MB modes and broadcast to the 4 luma blocks + 1 chroma block per
+/// chroma plane (4:2:0). Block-level modes follow the macroblock's mode (Table
+/// 7.18 row notes).
+fn read_inter_modes(br: &mut BitReader<'_>, frame: &mut IntraFrameDecoder<'_>) -> Result<()> {
+    use crate::inter::{decode_mode_rank, read_mode_alphabet, read_raw_mode, ModeScheme};
+    let scheme = read_mode_alphabet(br)?;
+    let (alphabet, raw_mode) = match scheme {
+        ModeScheme::Alphabet(a) => (a, false),
+        ModeScheme::Raw => ([Mode::InterNoMv; 8], true),
+    };
+
+    let layout = frame.layout.clone();
+    let pf = frame.headers.identification.pf;
+    // Walk MBs, collect modes to apply.
+    let mut decisions: Vec<(Mode, [usize; 4], Vec<usize>)> = Vec::new();
+    for_each_mb(&layout, |mbx, mby| {
+        let bxs = [mbx * 2, mbx * 2 + 1, mbx * 2, mbx * 2 + 1];
+        let bys = [mby * 2, mby * 2, mby * 2 + 1, mby * 2 + 1];
+        let bis: [usize; 4] = [
+            layout.global_coded(0, bxs[0], bys[0]) as usize,
+            layout.global_coded(0, bxs[1], bys[1]) as usize,
+            layout.global_coded(0, bxs[2], bys[2]) as usize,
+            layout.global_coded(0, bxs[3], bys[3]) as usize,
+        ];
+        let any_coded = bis.iter().any(|&bi| frame.bcoded[bi]);
+        let mb_mode = if !any_coded {
+            Mode::InterNoMv
+        } else if raw_mode {
+            read_raw_mode(br)?
+        } else {
+            let r = decode_mode_rank(br)? as usize;
+            alphabet[r]
+        };
+        // Collect chroma block indices.
+        let mut chroma = Vec::new();
+        for pli in 1..3 {
+            let cplane = &layout.planes[pli];
+            let cnbw = cplane.nbw;
+            let cnbh = cplane.nbh;
+            let (cbx, cby, dxr, dyr) = match pf {
+                PixelFormat::Yuv420 => (mbx, mby, 1u32, 1u32),
+                PixelFormat::Yuv422 => (mbx, mby * 2, 1u32, 2u32),
+                PixelFormat::Yuv444 | PixelFormat::Reserved => (mbx * 2, mby * 2, 2u32, 2u32),
+            };
+            for dy in 0..dyr {
+                for dx in 0..dxr {
+                    let x = cbx + dx;
+                    let y = cby + dy;
+                    if x < cnbw && y < cnbh {
+                        chroma.push(layout.global_coded(pli, x, y) as usize);
+                    }
+                }
+            }
+        }
+        decisions.push((mb_mode, bis, chroma));
+        Ok(())
+    })?;
+    for (mode, bis, chroma) in decisions {
+        for bi in bis {
+            frame.modes[bi] = mode;
+        }
+        for bj in chroma {
+            frame.modes[bj] = mode;
+        }
+    }
+    Ok(())
+}
+
+/// Decode motion vectors per spec §7.3.5.
+fn read_inter_mvs(br: &mut BitReader<'_>, frame: &mut IntraFrameDecoder<'_>) -> Result<()> {
+    use crate::inter::{decode_mv_component_raw, decode_mv_component_vlc};
+    // 1 bit: MVMODE (0 = VLC, 1 = raw 6-bit per component).
+    let mvmode_raw = br.read_bit()?;
+    let read_mv = |br: &mut BitReader<'_>| -> Result<(i32, i32)> {
+        if mvmode_raw {
+            let x = decode_mv_component_raw(br)?;
+            let y = decode_mv_component_raw(br)?;
+            Ok((x, y))
+        } else {
+            let x = decode_mv_component_vlc(br)?;
+            let y = decode_mv_component_vlc(br)?;
+            Ok((x, y))
+        }
+    };
+    let mut last_mv = (0i32, 0i32);
+    let mut last_mv2 = (0i32, 0i32);
+
+    let layout = frame.layout.clone();
+    let pf = frame.headers.identification.pf;
+
+    // Build per-MB plan first.
+    struct Plan {
+        bis: [usize; 4],
+        chroma: Vec<usize>,
+        mode: Mode,
+    }
+    let mut plans: Vec<Plan> = Vec::new();
+    for_each_mb(&layout, |mbx, mby| {
+        let bxs = [mbx * 2, mbx * 2 + 1, mbx * 2, mbx * 2 + 1];
+        let bys = [mby * 2, mby * 2, mby * 2 + 1, mby * 2 + 1];
+        let bis: [usize; 4] = [
+            layout.global_coded(0, bxs[0], bys[0]) as usize,
+            layout.global_coded(0, bxs[1], bys[1]) as usize,
+            layout.global_coded(0, bxs[2], bys[2]) as usize,
+            layout.global_coded(0, bxs[3], bys[3]) as usize,
+        ];
+        let mode = bis
+            .iter()
+            .find(|&&bi| frame.bcoded[bi])
+            .map(|&bi| frame.modes[bi])
+            .unwrap_or(Mode::InterNoMv);
+        let mut chroma = Vec::new();
+        for pli in 1..3 {
+            let cplane = &layout.planes[pli];
+            let cnbw = cplane.nbw;
+            let cnbh = cplane.nbh;
+            let (cbx, cby, dxr, dyr) = match pf {
+                PixelFormat::Yuv420 => (mbx, mby, 1u32, 1u32),
+                PixelFormat::Yuv422 => (mbx, mby * 2, 1u32, 2u32),
+                PixelFormat::Yuv444 | PixelFormat::Reserved => (mbx * 2, mby * 2, 2u32, 2u32),
+            };
+            for dy in 0..dyr {
+                for dx in 0..dxr {
+                    let x = cbx + dx;
+                    let y = cby + dy;
+                    if x < cnbw && y < cnbh {
+                        chroma.push(layout.global_coded(pli, x, y) as usize);
+                    }
+                }
+            }
+        }
+        plans.push(Plan { bis, chroma, mode });
+        Ok(())
+    })?;
+    for plan in plans {
+        let mb_mv: (i32, i32) = match plan.mode {
+            Mode::InterMv | Mode::InterGoldenMv => {
+                let mv = read_mv(br)?;
+                if plan.mode == Mode::InterMv {
+                    last_mv2 = last_mv;
+                    last_mv = mv;
+                }
+                mv
+            }
+            Mode::InterMvLast => last_mv,
+            Mode::InterMvLast2 => {
+                let m = last_mv2;
+                std::mem::swap(&mut last_mv, &mut last_mv2);
+                m
+            }
+            Mode::InterMvFour => {
+                let mut mvs4 = [(0i32, 0i32); 4];
+                for i in 0..4 {
+                    if frame.bcoded[plan.bis[i]] {
+                        mvs4[i] = read_mv(br)?;
+                    }
+                }
+                for i in 0..4 {
+                    frame.mvs[plan.bis[i]] = mvs4[i];
+                }
+                last_mv2 = last_mv;
+                last_mv = mvs4[3];
+                let avg_x = mvs4.iter().map(|m| m.0).sum::<i32>();
+                let avg_y = mvs4.iter().map(|m| m.1).sum::<i32>();
+                (avg_x.div_euclid(4), avg_y.div_euclid(4))
+            }
+            _ => (0, 0),
+        };
+        if plan.mode != Mode::InterMvFour {
+            for &bi in &plan.bis {
+                frame.mvs[bi] = mb_mv;
+            }
+        }
+        for bj in plan.chroma {
+            frame.mvs[bj] = mb_mv;
+        }
+    }
+    Ok(())
 }
 
 impl Decoder for TheoraDecoder {

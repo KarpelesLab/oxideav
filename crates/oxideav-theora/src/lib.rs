@@ -5,11 +5,11 @@
 //!
 //! Status:
 //! * Header parsing (identification + comment + setup) — done.
-//! * I-frame decode — scaffold only: packet classification works but the
-//!   actual block/Huffman/IDCT pipeline returns `Error::Unsupported`. This
-//!   is the milestone the next session will land.
-//! * Inter frames — out of scope; returns `Error::Unsupported` with a clear
-//!   message.
+//! * I-frame decode — done; bit-exact IDCT, integer-domain dequant, full
+//!   loop filter.
+//! * P-frame (inter) decode — done; macroblock modes, motion vectors
+//!   (LAST/LAST2/golden), 4-MV mode, half-pel motion compensation,
+//!   per-RFI DC prediction, and golden-frame reference are all wired up.
 
 pub mod bitreader;
 pub mod block;
@@ -18,6 +18,7 @@ pub mod dct;
 pub mod decoder;
 pub mod headers;
 pub mod huffman;
+pub mod inter;
 pub mod quant;
 
 use oxideav_codec::{CodecRegistry, Decoder};

@@ -1,14 +1,15 @@
-//! Intra-frame block decode.
+//! Frame block decode (intra + inter).
 //!
 //! Implements:
 //!   * DCT coefficient token decode (spec §7.7)
-//!   * DC prediction reversal (spec §7.8)
+//!   * DC prediction reversal (spec §7.8) — per-reference last_dc tracking
 //!   * Dequantisation (spec §7.9.2) and integer inverse DCT (spec §7.9.3)
-//!   * Pixel reconstruction (spec §7.9.4) for INTRA blocks
+//!   * Pixel reconstruction (spec §7.9.4) for INTRA + INTER blocks
 //!   * Loop filter (spec §7.10)
 //!
-//! Inter-frame support is out of scope: the decoder rejects inter packets
-//! with Error::Unsupported.
+//! Intra and inter share most of the pipeline; the differences live in
+//! `crate::inter` (SBPM/BCODED, modes, motion vectors) and the per-block
+//! predictor used during reconstruction.
 
 use oxideav_core::{Error, Result};
 
@@ -16,9 +17,10 @@ use crate::bitreader::BitReader;
 use crate::coded_order::FrameLayout;
 use crate::dct::{idct2d, INV_ZIGZAG};
 use crate::headers::{Headers, PixelFormat, Setup};
+use crate::inter::Mode;
 use crate::quant::build_qmat;
 
-/// Per-frame decode context.
+/// Per-frame decode context. Shared by intra and inter frames.
 pub struct IntraFrameDecoder<'a> {
     pub headers: &'a Headers,
     pub layout: FrameLayout,
@@ -37,6 +39,14 @@ pub struct IntraFrameDecoder<'a> {
     /// Luma Huffman-table index for DC+AC groups (chosen per ti).
     pub hti_l: [u8; 5],
     pub hti_c: [u8; 5],
+    /// True if this is an inter frame; affects DC tracking, predictor, and
+    /// quant-type-index (qti).
+    pub is_inter: bool,
+    /// Per-block coding mode (intra-frame: all `Mode::Intra`).
+    pub modes: Vec<Mode>,
+    /// Per-block motion vector (luma reference). For non-MV modes the MV is
+    /// (0, 0). Stored in full-pel signed units; chroma scaling done at MC time.
+    pub mvs: Vec<(i32, i32)>,
 }
 
 impl<'a> IntraFrameDecoder<'a> {
@@ -55,16 +65,33 @@ impl<'a> IntraFrameDecoder<'a> {
             coeffs: vec![0i32; nbs * 64],
             hti_l: [0u8; 5],
             hti_c: [0u8; 5],
+            is_inter: false,
+            modes: vec![Mode::Intra; nbs],
+            mvs: vec![(0, 0); nbs],
         }
     }
 
-    /// §7.1 frame header decode. Caller must have already consumed the leading
+    /// §7.1 intra-frame header. Caller must have already consumed the leading
     /// "data-packet" bit and frame-type bit before invoking this.
-    ///
-    /// This function continues from the frame-header position: reads QIS[0]
-    /// (6 bits), MOREQIS, optional QIS[1..2], and for intra the 3 reserved
-    /// bits.
     pub fn read_intra_frame_header(&mut self, br: &mut BitReader<'_>) -> Result<()> {
+        self.read_qis(br)?;
+        // Intra: 3 reserved bits that MUST be zero.
+        let reserved = br.read_u32(3)?;
+        if reserved != 0 {
+            return Err(Error::invalid(
+                "Theora intra frame: non-zero reserved header bits",
+            ));
+        }
+        Ok(())
+    }
+
+    /// §7.1 inter-frame header. Caller has consumed the data-packet/ftype bits.
+    /// Inter frames have no trailing reserved bits in this position.
+    pub fn read_inter_frame_header(&mut self, br: &mut BitReader<'_>) -> Result<()> {
+        self.read_qis(br)
+    }
+
+    fn read_qis(&mut self, br: &mut BitReader<'_>) -> Result<()> {
         self.qis[0] = br.read_u32(6)? as u8;
         let mut nqis = 1usize;
         if br.read_bit()? {
@@ -76,13 +103,6 @@ impl<'a> IntraFrameDecoder<'a> {
             }
         }
         self.nqis = nqis;
-        // Intra: 3 reserved bits that MUST be zero.
-        let reserved = br.read_u32(3)?;
-        if reserved != 0 {
-            return Err(Error::invalid(
-                "Theora intra frame: non-zero reserved header bits",
-            ));
-        }
         Ok(())
     }
 
@@ -211,53 +231,53 @@ impl<'a> IntraFrameDecoder<'a> {
             .count() as u32
     }
 
-    /// §7.8.2 Inverting DC prediction. Runs in raster order per plane.
+    /// §7.8.2 Inverting DC prediction. Runs in raster order per plane. Each
+    /// reference frame index (rfi=0/1/2) maintains its own LAST_DC.
     pub fn undo_dc_prediction(&mut self) {
         for pli in 0..3 {
             let mut last_dc = [0i32; 3];
             let plane = &self.layout.planes[pli];
             let nbw = plane.nbw;
             let nbh = plane.nbh;
-            // Iterate in raster order (row 0 = bottom, but order doesn't matter
-            // for left/below-left/below/below-right neighbours as long as it's
-            // bottom-up row-by-row — which matches "raster order" in this
-            // bottom-left coordinate system).
+            // Iterate in raster order (row 0 = bottom). The bottom-left
+            // neighbour set means we always process predecessors first.
             for by in 0..nbh {
                 for bx in 0..nbw {
                     let bi = self.layout.global_coded(pli, bx, by) as usize;
                     if !self.bcoded[bi] {
                         continue;
                     }
-                    // Intra: rfi = 0. All neighbour filtering reduces to
-                    // "block exists and is coded".
-                    let has_left = bx > 0;
-                    let has_down = by > 0;
-                    let has_down_left = bx > 0 && by > 0;
-                    let has_down_right = bx + 1 < nbw && by > 0;
+                    let rfi = self.modes[bi].rfi() as usize;
+                    // Only neighbours that are coded AND share the same rfi
+                    // contribute to prediction (spec §7.8.2).
+                    let neighbour_ok = |x: u32, y: u32| -> bool {
+                        let j = self.layout.global_coded(pli, x, y) as usize;
+                        self.bcoded[j] && self.modes[j].rfi() as usize == rfi
+                    };
                     let neighbour = |x: u32, y: u32| -> i32 {
                         let j = self.layout.global_coded(pli, x, y) as usize;
                         self.coeffs[j * 64]
                     };
                     let mut p = [false; 4];
                     let mut pv = [0i32; 4];
-                    if has_left {
+                    if bx > 0 && neighbour_ok(bx - 1, by) {
                         p[0] = true;
                         pv[0] = neighbour(bx - 1, by);
                     }
-                    if has_down_left {
+                    if bx > 0 && by > 0 && neighbour_ok(bx - 1, by - 1) {
                         p[1] = true;
                         pv[1] = neighbour(bx - 1, by - 1);
                     }
-                    if has_down {
+                    if by > 0 && neighbour_ok(bx, by - 1) {
                         p[2] = true;
                         pv[2] = neighbour(bx, by - 1);
                     }
-                    if has_down_right {
+                    if bx + 1 < nbw && by > 0 && neighbour_ok(bx + 1, by - 1) {
                         p[3] = true;
                         pv[3] = neighbour(bx + 1, by - 1);
                     }
                     let dcpred = if !p.iter().any(|&b| b) {
-                        last_dc[0]
+                        last_dc[rfi]
                     } else {
                         let (weights, pdiv) = weights_for(p);
                         let mut sum: i32 = 0;
@@ -287,7 +307,7 @@ impl<'a> IntraFrameDecoder<'a> {
                     // Truncate to 16-bit signed.
                     let dc = (dc as i16) as i32;
                     self.coeffs[bi * 64] = dc;
-                    last_dc[0] = dc; // intra → rfi = 0
+                    last_dc[rfi] = dc;
                 }
             }
         }
@@ -297,24 +317,39 @@ impl<'a> IntraFrameDecoder<'a> {
     /// Writes to per-plane buffers. Each buffer is `nbw*8 × nbh*8` laid out
     /// top-down (row 0 is the top). Allocates and returns the three planes.
     pub fn reconstruct(&self) -> [Vec<u8>; 3] {
+        self.reconstruct_with_refs(None, None)
+    }
+
+    /// §7.9.4 reconstruction with optional reference frames for inter blocks.
+    /// `prev_ref` and `golden_ref` are the post-loop-filter pixel buffers from
+    /// previous keyframes / inter frames, in the same coded-frame size and
+    /// layout as the output.
+    pub fn reconstruct_with_refs(
+        &self,
+        prev_ref: Option<&[Vec<u8>; 3]>,
+        golden_ref: Option<&[Vec<u8>; 3]>,
+    ) -> [Vec<u8>; 3] {
         let id = &self.headers.identification;
         let qi0 = self.qis[0];
 
-        // For intra frames every block is INTRA, so qti=0 always.
-        // Precompute quant matrices for DC + AC for each (pli, qi).
-        // There are at most NQIS different AC qi values + 1 DC qi value.
         let setup: &Setup = &self.headers.setup;
-        let mut ac_qmats: [Vec<Option<[i32; 64]>>; 3] =
-            [vec![None; 64], vec![None; 64], vec![None; 64]];
-        let mut dc_qmats: [[i32; 64]; 3] = [[0i32; 64]; 3];
-        for pli in 0..3 {
-            dc_qmats[pli] = build_qmat(setup, 0, pli, qi0);
-        }
-        let cache_ac = |pli: usize, qi: u8, cache: &mut [Vec<Option<[i32; 64]>>; 3]| {
-            if cache[pli][qi as usize].is_none() {
-                cache[pli][qi as usize] = Some(build_qmat(setup, 0, pli, qi));
+        // qti index: 0 = intra, 1 = inter.
+        let mut ac_qmats: [[Vec<Option<[i32; 64]>>; 3]; 2] = [
+            [vec![None; 64], vec![None; 64], vec![None; 64]],
+            [vec![None; 64], vec![None; 64], vec![None; 64]],
+        ];
+        let mut dc_qmats: [[[i32; 64]; 3]; 2] = [[[0i32; 64]; 3]; 2];
+        for qti in 0..2 {
+            for pli in 0..3 {
+                dc_qmats[qti][pli] = build_qmat(setup, qti, pli, qi0);
             }
-        };
+        }
+        let cache_ac =
+            |qti: usize, pli: usize, qi: u8, cache: &mut [[Vec<Option<[i32; 64]>>; 3]; 2]| {
+                if cache[qti][pli][qi as usize].is_none() {
+                    cache[qti][pli][qi as usize] = Some(build_qmat(setup, qti, pli, qi));
+                }
+            };
 
         let mut planes_out: [Vec<u8>; 3] = Default::default();
         for pli in 0..3 {
@@ -323,10 +358,18 @@ impl<'a> IntraFrameDecoder<'a> {
             planes_out[pli] = vec![0u8; (pw * ph) as usize];
         }
 
+        // Pre-fill output with copy-of-reference for uncoded blocks. For inter
+        // frames, uncoded blocks output the previous reference unchanged.
+        if self.is_inter {
+            if let Some(prev) = prev_ref {
+                for pli in 0..3 {
+                    planes_out[pli].copy_from_slice(&prev[pli]);
+                }
+            }
+        }
+
         for bi in 0..(self.layout.nbs as usize) {
             let (pli, bx, by) = self.layout.global_xy(bi as u32);
-            // Block pixel corner: lower-left origin. We'll convert to top-down
-            // pixel coords when writing.
             let plane = &self.layout.planes[pli];
             let pw = plane.nbw * 8;
             let ph = plane.nbh * 8;
@@ -334,21 +377,23 @@ impl<'a> IntraFrameDecoder<'a> {
                 continue;
             }
 
+            let mode = self.modes[bi];
+            let qti = if mode == Mode::Intra { 0usize } else { 1usize };
+
             // Dequant & IDCT.
             let mut res = [0i32; 64];
             if self.ncoeffs[bi] < 2 {
                 // DC-only shortcut.
-                let qmat = &dc_qmats[pli];
+                let qmat = &dc_qmats[qti][pli];
                 let c = ((self.coeffs[bi * 64] * qmat[0]) + 15) >> 5;
                 let c16 = (c as i16) as i32;
                 res.fill(c16);
             } else {
                 let qi = self.qis[self.qiis[bi] as usize];
-                cache_ac(pli, qi, &mut ac_qmats);
-                let ac = ac_qmats[pli][qi as usize].as_ref().unwrap();
-                let dc_q = &dc_qmats[pli];
+                cache_ac(qti, pli, qi, &mut ac_qmats);
+                let ac = ac_qmats[qti][pli][qi as usize].as_ref().unwrap();
+                let dc_q = &dc_qmats[qti][pli];
                 let mut dqc = [0i32; 64];
-                // ci=0: DC uses DC qmat.
                 dqc[0] = ((self.coeffs[bi * 64] * dc_q[0]) as i16) as i32;
                 for ci in 1..64 {
                     let zzi = INV_ZIGZAG[ci];
@@ -357,18 +402,58 @@ impl<'a> IntraFrameDecoder<'a> {
                 }
                 res = idct2d(&dqc);
             }
-            // Add the INTRA predictor (constant 128) and clamp.
-            // Write into plane, translating from bottom-left to top-down.
+
+            // Predictor.
+            let mut pred = [128i32; 64];
+            if mode != Mode::Intra {
+                // Pick reference frame.
+                let rfi = mode.rfi();
+                let refbuf = match rfi {
+                    1 => prev_ref,
+                    2 => golden_ref,
+                    _ => None,
+                };
+                if let Some(rb) = refbuf {
+                    let (mv_x, mv_y) = self.mvs[bi];
+                    let bx_px = (bx * 8) as i32;
+                    let by_px_bottom = (by * 8) as i32;
+                    // Block top-left in top-down coords.
+                    let bx_top = bx_px;
+                    let by_top = (ph as i32) - 1 - (by_px_bottom + 7);
+                    let pf = id.pf;
+                    let (sub_x, sub_y) = if pli == 0 {
+                        (false, false)
+                    } else {
+                        (pf.chroma_shift_x() == 1, pf.chroma_shift_y() == 1)
+                    };
+                    crate::inter::motion_compensate(
+                        &rb[pli], pw as i32, ph as i32, bx_top, by_top, mv_x, mv_y, sub_x, sub_y,
+                        &mut pred,
+                    );
+                }
+            }
+
+            // Write into plane in top-down order. The IDCT residual is in
+            // bottom-left row order: res[ry=0] is the BOTTOM row of the block.
+            // For inter blocks, the predictor written by motion_compensate is
+            // in TOP-DOWN order: pred[0..8] is the TOP row. We map both to the
+            // top-down output buffer.
             let bx_px = bx * 8;
-            let by_px_bottom = by * 8; // distance from bottom
+            let by_px_bottom = by * 8;
             let out = &mut planes_out[pli];
-            for ry in 0..8u32 {
-                // ry=0 is the bottom row of the 8x8 block per spec §7.9.3.2.
-                // In top-down output, this maps to pixel row (ph - 1 - (by_px_bottom + ry)).
-                let py = ph - 1 - (by_px_bottom + ry);
+            for ry_top in 0..8u32 {
+                // ry_top = 0 is the top row of the block in top-down output.
+                let py = ph - 1 - (by_px_bottom + 7 - ry_top);
+                let ry_bot = 7 - ry_top;
                 for rx in 0..8u32 {
                     let px = bx_px + rx;
-                    let p = res[(ry as usize) * 8 + rx as usize] + 128;
+                    let predv = if mode == Mode::Intra {
+                        pred[(ry_bot as usize) * 8 + rx as usize]
+                    } else {
+                        pred[(ry_top as usize) * 8 + rx as usize]
+                    };
+                    let resv = res[(ry_bot as usize) * 8 + rx as usize];
+                    let p = resv + predv;
                     let clamped = p.clamp(0, 255) as u8;
                     out[(py * pw + px) as usize] = clamped;
                 }
@@ -402,7 +487,7 @@ impl<'a> IntraFrameDecoder<'a> {
             // terms. We flip when we actually access the buffer.
             let by_px_bottom = (by * 8) as i32;
             let buf = &mut planes[pli];
-            // Left edge of block bi.
+            // Left edge of block bi (filter the seam to the LEFT neighbour).
             if bx_px > 0 {
                 let fx = bx_px - 2;
                 let fy = by_px_bottom;
@@ -414,16 +499,27 @@ impl<'a> IntraFrameDecoder<'a> {
                 let fy = by_px_bottom - 2;
                 vertical_filter(buf, pw, ph, fx, fy, l);
             }
-            // Right edge of bi: only if the right neighbour is *not* coded.
-            // For intra all blocks are coded, so the right neighbour (if it
-            // exists) is always coded — the spec says "if BCODED[bj] is zero"
-            // so we'd skip unless at frame edge. For intra we still filter
-            // frame edges? No — the right-edge check is only triggered when
-            // (BX+8) < RPW and the right neighbour is uncoded. For intra, we
-            // skip entirely. Same for top edge.
-            // (In inter this is what picks up the discontinuity across an
-            // uncoded neighbour.)
-            // Nothing to do here for intra.
+            // Right edge of bi: filter only if right neighbour exists AND is
+            // uncoded (the loop filter for that neighbour will otherwise
+            // process the same edge from the other side later).
+            let plane_layout = &self.layout.planes[pli];
+            if bx + 1 < plane_layout.nbw {
+                let bj = self.layout.global_coded(pli, bx + 1, by) as usize;
+                if !self.bcoded[bj] {
+                    let fx = bx_px + 6;
+                    let fy = by_px_bottom;
+                    horizontal_filter(buf, pw, ph, fx, fy, l);
+                }
+            }
+            // Top edge of bi.
+            if by + 1 < plane_layout.nbh {
+                let bj = self.layout.global_coded(pli, bx, by + 1) as usize;
+                if !self.bcoded[bj] {
+                    let fx = bx_px;
+                    let fy = by_px_bottom + 6;
+                    vertical_filter(buf, pw, ph, fx, fy, l);
+                }
+            }
             let _ = id;
         }
     }
@@ -717,6 +813,50 @@ fn decode_coef_token(
         }
     }
     Ok(())
+}
+
+/// Short-run bit string decode (spec §7.2.2). Used for per-block BCODED in
+/// partial super-blocks (max run = 30). Same toggle semantics as long-run
+/// but does NOT re-read bit on max-length run.
+pub fn read_short_run_bitstring(br: &mut BitReader<'_>, nbits: usize) -> Result<Vec<bool>> {
+    let mut out = Vec::with_capacity(nbits);
+    if nbits == 0 {
+        return Ok(out);
+    }
+    let mut bit = br.read_bit()?;
+    while out.len() < nbits {
+        let (rstart, rbits) = short_run_huffman(br)?;
+        let roffs = br.read_u32(rbits)?;
+        let rlen = rstart + roffs;
+        for _ in 0..rlen {
+            if out.len() >= nbits {
+                break;
+            }
+            out.push(bit);
+        }
+        bit = !bit;
+    }
+    Ok(out)
+}
+
+fn short_run_huffman(br: &mut BitReader<'_>) -> Result<(u32, u32)> {
+    // Table 7.11.
+    if !br.read_bit()? {
+        return Ok((1, 1));
+    }
+    if !br.read_bit()? {
+        return Ok((3, 1));
+    }
+    if !br.read_bit()? {
+        return Ok((5, 1));
+    }
+    if !br.read_bit()? {
+        return Ok((7, 2));
+    }
+    if !br.read_bit()? {
+        return Ok((11, 2));
+    }
+    Ok((15, 4))
 }
 
 /// Long-run bit string decode (spec §7.2.1).
