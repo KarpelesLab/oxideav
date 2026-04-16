@@ -575,7 +575,7 @@ fn parse_audio_sample_entry(entry: &[u8], t: &mut Track) -> Result<()> {
 fn parse_video_sample_entry(entry: &[u8], t: &mut Track) -> Result<()> {
     // VisualSampleEntry: 6 reserved + 2 data_ref_idx + 16 pre_defined +
     // 2 width + 2 height + ... = 78 bytes total payload. Offsets per
-    // ISO/IEC 14496-12. We only need up to byte 28 for width + height.
+    // ISO/IEC 14496-12.
     if entry.len() < 28 {
         return Ok(());
     }
@@ -583,6 +583,31 @@ fn parse_video_sample_entry(entry: &[u8], t: &mut Track) -> Result<()> {
     let height = u16::from_be_bytes([entry[26], entry[27]]);
     t.width = Some(width as u32);
     t.height = Some(height as u32);
+
+    // Walk the codec-specific child boxes that sit after the 78-byte
+    // VisualSampleEntry preamble. We surface configuration records as
+    // extradata so downstream codec crates can bootstrap from them.
+    if entry.len() <= 78 {
+        return Ok(());
+    }
+    let mut cur = std::io::Cursor::new(&entry[78..]);
+    let end = (entry.len() - 78) as u64;
+    while cur.position() < end {
+        let hdr = match read_box_header(&mut cur)? {
+            Some(h) => h,
+            None => break,
+        };
+        let psz = hdr.payload_size().unwrap_or(0) as usize;
+        let body = read_bytes_vec(&mut cur, psz)?;
+        match &hdr.fourcc {
+            // AVCConfigurationRecord (ISO/IEC 14496-15 §5.3.3) — for
+            // h264, our decoder consumes this verbatim.
+            b"avcC" => t.extradata = body,
+            // HEVCDecoderConfigurationRecord (ISO/IEC 14496-15 §8.3.3).
+            b"hvcC" => t.extradata = body,
+            _ => {}
+        }
+    }
     Ok(())
 }
 

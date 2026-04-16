@@ -16,6 +16,7 @@ members = [
     "crates/oxideav-mjpeg",
     "crates/oxideav-mpeg1video",
     "crates/oxideav-vp9",
+    "crates/oxideav-h265",
     "crates/oxideav-mpeg4video",
     "crates/oxideav-theora",
     "crates/oxideav-iff",
@@ -60,6 +61,7 @@ oxideav-avi = { path = "crates/oxideav-avi", version = "0.0.1" }
 oxideav-mjpeg = { path = "crates/oxideav-mjpeg", version = "0.0.1" }
 oxideav-mpeg1video = { path = "crates/oxideav-mpeg1video", version = "0.0.1" }
 oxideav-vp9 = { path = "crates/oxideav-vp9", version = "0.0.1" }
+oxideav-h265 = { path = "crates/oxideav-h265", version = "0.0.1" }
 oxideav-mpeg4video = { path = "crates/oxideav-mpeg4video", version = "0.0.1" }
 oxideav-theora = { path = "crates/oxideav-theora", version = "0.0.1" }
 oxideav-iff = { path = "crates/oxideav-iff", version = "0.0.1" }

@@ -36,6 +36,7 @@ default = [
     "gsm",
     "speex",
     "vp9",
+    "h265",
 ]
 basic = ["dep:oxideav-basic"]
 ogg = ["dep:oxideav-ogg"]
@@ -63,6 +64,7 @@ g729 = ["dep:oxideav-g729"]
 gsm = ["dep:oxideav-gsm"]
 speex = ["dep:oxideav-speex"]
 vp9 = ["dep:oxideav-vp9"]
+h265 = ["dep:oxideav-h265"]
 
 [dependencies]
 oxideav-core = { workspace = true }
@@ -95,3 +97,4 @@ oxideav-g729 = { workspace = true, optional = true }
 oxideav-gsm = { workspace = true, optional = true }
 oxideav-speex = { workspace = true, optional = true }
 oxideav-vp9 = { workspace = true, optional = true }
+oxideav-h265 = { workspace = true, optional = true }

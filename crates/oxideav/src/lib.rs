@@ -32,6 +32,8 @@ pub use oxideav_g728 as g728;
 pub use oxideav_g729 as g729;
 #[cfg(feature = "gsm")]
 pub use oxideav_gsm as gsm;
+#[cfg(feature = "h265")]
+pub use oxideav_h265 as h265;
 #[cfg(feature = "iff")]
 pub use oxideav_iff as iff;
 #[cfg(feature = "mjpeg")]
@@ -189,6 +191,10 @@ impl Registries {
         #[cfg(feature = "vp9")]
         {
             oxideav_vp9::register(&mut codecs);
+        }
+        #[cfg(feature = "h265")]
+        {
+            oxideav_h265::register(&mut codecs);
         }
 
         Self { codecs, containers }
