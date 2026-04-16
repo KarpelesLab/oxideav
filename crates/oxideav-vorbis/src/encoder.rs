@@ -1,29 +1,57 @@
-//! Vorbis encoder (tier 1).
+//! Vorbis encoder (tier 2 — ffmpeg-interop quality).
 //!
-//! Supports mono and stereo at 48 kHz with both short (256) and long (2048)
-//! blocks. The encoder builds its own setup header containing:
+//! Supports mono and stereo at any sample rate. The setup header carries
+//! both the short (256) and long (2048) block configurations, but the
+//! current driver always emits long blocks (no transient detection yet —
+//! see TODO below). The setup contains:
 //!
-//! - A Y-value codebook (128 entries, length 7, dim 1) for floor1 amplitudes.
-//! - A single-entry classbook (sparse, length 0) so residue partition class
-//!   selection costs zero bits.
-//! - A dim-2 VQ codebook with values in {-4..+4} per dimension (wider than
-//!   the earlier ternary book — loud signals no longer clip).
+//! - A Y-value codebook (128 entries, length 7, dim 1) for floor1
+//!   amplitudes.
+//! - A 2-entry classbook (length 1, dim 1) for residue partition
+//!   classification — the one used class always picks a one-bit "0".
+//! - A dim-2 VQ codebook with 128 entries, values in {-5..+5}^2 per
+//!   dimension (121 valid grid + 7 padding entries to make the Huffman
+//!   tree full — libvorbis rejects under-specified trees).
 //! - One short floor1 with 8 posts and one long floor1 with 32 posts.
 //! - Residue type 1 (concatenated per-channel) for both block sizes.
-//! - One mapping per block-size, 1 or 2 channels, **no coupling** for
-//!   stereo (side-by-side independent L/R). Coupling is deferred to a
-//!   follow-up pass.
+//! - One mapping per block-size, 1 or 2 channels. Stereo mappings declare
+//!   one coupling step `(mag=0, ang=1)` — see `forward_couple` for the
+//!   sign-coded sum/difference transform.
 //! - Two modes: mode 0 = short, mode 1 = long.
 //!
-//! For most blocks the encoder emits a long block. The very first and last
-//! blocks of the stream may be short to shape the window transitions. The
-//! Vorbis spec permits the encoder to choose block sizes freely.
+//! Pipeline for an audio block: build asymmetric sin-window → forward
+//! MDCT (with `2/N` scale) → per-channel floor1 analysis (peak in the
+//! window between adjacent posts, divided by `FLOOR_SCALE` so residues
+//! have headroom, ATH-clamped at the bottom) → floor curve via
+//! `synth_floor1` → residue = spectrum / floor_curve → forward channel
+//! couple (stereo only) → per-partition exhaustive VQ search → emit
+//! packet. Each block advances by N/2 samples and overlaps by N/2 with
+//! the previous block (sin/sin OLA — see `prev_tail`).
 //!
-//! The pipeline for a real audio block is: sin-window → forward MDCT →
-//! floor1 analysis (nearest-dB per post) → floor curve via `synth_floor1`
-//! → residue = spectrum/floor → per-partition VQ search → emit packet.
-//! Silent blocks (|max| < threshold) emit a 1-byte "floor unused" packet
-//! that decodes to zero PCM.
+//! Known limitations / TODO for libvorbis parity:
+//!
+//! 1. **Transient detection + short-block switching**: the setup header
+//!    declares short and long modes but the runtime always picks long.
+//!    Adding short blocks would help percussive content (less pre-echo).
+//!    Requires a 2-block lookahead pipeline so prev/next flags are
+//!    correct at emit time; the cleanest way is to buffer 2 long blocks
+//!    of input and decide block-size after both are available.
+//!
+//! 2. **Point-stereo coupling**: our coupling is sum/difference (lossless,
+//!    Vorbis I §1.3.3). Real libvorbis uses lossy point-stereo above some
+//!    threshold frequency, which roughly halves the residue cost for the
+//!    angle channel. Plumbing point-stereo means signaling it in the
+//!    mapping setup (per-band coupling thresholds) and adding the
+//!    encoder-side phase encoding.
+//!
+//! 3. **Bigger residue VQ family**: a single 128-entry book serves both
+//!    short and long blocks. libvorbis ships dozens of books per quality
+//!    setting plus master codebooks that classify partition energy with
+//!    fewer bits. The Vorbis I Annex B reference codebooks (BSD-licensed
+//!    upstream, but transcribed from public-domain spec) would let us
+//!    match libvorbis bitrates in another tier of work.
+//!
+//! 4. **Floor type 0 (LSP)**: never seen in modern Vorbis files; deferred.
 
 use std::collections::VecDeque;
 
@@ -58,14 +86,24 @@ const RESIDUE_PARTITION_SIZE: u32 = 2;
 /// VQ codebook dimensionality.
 const VQ_DIM: usize = 2;
 
-/// VQ value range: values in {-VQ_RANGE_NEG..=VQ_RANGE_POS} per dimension.
-const VQ_VALUES_PER_DIM: u32 = 8; // multiplicands 0..7 → values -3..4 with min=-3, delta=1
-const VQ_MIN: f32 = -3.0;
+/// VQ value range: values in {-5..=5} per dimension (11 multiplicands per
+/// dim) packed into a 128-entry codebook (7-bit codeword) so the Huffman
+/// tree is exactly full (Vorbis I §3.2.1 forbids both over- and
+/// under-specified codebooks; libvorbis rejects 121 entries at length 7 —
+/// but 128 entries at length 7 is a perfect-fill tree). Entries 0..120
+/// span the (e%11, e/11) grid in {-5..5}^2; entries 121..127 wrap modulo
+/// 11 and alias to (0..6, -5) — the encoder never picks them.
+const VQ_VALUES_PER_DIM: u32 = 11;
+const VQ_MIN: f32 = -5.0;
 const VQ_DELTA: f32 = 1.0;
-/// Total VQ book entries = VQ_VALUES_PER_DIM^VQ_DIM.
-const VQ_ENTRIES: u32 = 64;
-/// Length of each VQ codeword — log2(VQ_ENTRIES).
-const VQ_CODEWORD_LEN: u32 = 6;
+/// Number of VQ entries actually used (11×11). Encoder's exhaustive
+/// search restricts itself to this range.
+const VQ_USED_ENTRIES: u32 = 121;
+/// Total VQ book entries — must be 2^VQ_CODEWORD_LEN to keep the Huffman
+/// tree well-formed.
+const VQ_ENTRIES: u32 = 128;
+/// Length of each VQ codeword — log2(VQ_ENTRIES) = 7.
+const VQ_CODEWORD_LEN: u32 = 7;
 
 /// Assemble the Vorbis Identification header (§4.2.2).
 pub fn build_identification_header(
@@ -242,22 +280,33 @@ fn write_setup_codebook_y(w: &mut BitWriter) {
     w.write_u32(0, 4); // lookup_type = 0
 }
 
-/// Codebook 1: dim=1, 1 entry, sparse+unused → length 0 so decode_scalar
-/// returns entry 0 without consuming any bits.
+/// Codebook 1: dim=1, 2 entries, both length 1 (codes 0 and 1). Used as
+/// the residue classbook for our 1-classification setup — encoder always
+/// picks entry 0 (1 bit "0") per classword group. We can't use a 1-entry
+/// 0-bit codebook here because the Vorbis spec requires Huffman trees to
+/// be exactly filled (libvorbis rejects sparse-with-only-zero-length books).
 fn write_setup_codebook_class(w: &mut BitWriter) {
     w.write_u32(0x564342, 24);
     w.write_u32(1, 16);
-    w.write_u32(1, 24);
+    w.write_u32(2, 24);
     w.write_bit(false); // ordered
-    w.write_bit(true); // sparse
-    w.write_bit(false); // entry 0 unused → length 0
+    w.write_bit(false); // sparse
+    for _ in 0..2 {
+        w.write_u32(0, 5); // length-1 = 0 → 1
+    }
     w.write_u32(0, 4); // lookup_type = 0
 }
 
-/// Codebook 2: residue VQ. dim=2, 64 entries, all length 6. Lookup type 1
-/// with min=-3, delta=1, value_bits=3, seq=false, multiplicands [0..7].
-/// Decoded VQ pair for entry e: (e % 8) and (e / 8) mapped via
-/// `m * delta + min`, so values span {-3, -2, -1, 0, 1, 2, 3, 4}^2.
+/// Codebook 2: residue VQ. dim=2, 121 entries, all length 7. Lookup type 1
+/// with min=-5, delta=1, value_bits=4, seq=false, multiplicands [0..10].
+/// Decoded VQ pair for entry e: (e % 11) and (e / 11) mapped via
+/// `m * delta + min`, so values span {-5..5}^2 (covers ±5 residues).
+///
+/// 121 entries < 128 = 2^7, so the canonical Huffman tree at length 7
+/// is *underspecified* — entries 0..120 get codewords 0..120, the tree
+/// has 7 unused slots at the top. libvorbis tolerates this; our codebook
+/// builder accepts it as well (`build_decoder` checks for overspec, not
+/// underspec).
 fn write_setup_codebook_vq(w: &mut BitWriter) {
     w.write_u32(0x564342, 24);
     w.write_u32(VQ_DIM as u32, 16);
@@ -270,10 +319,10 @@ fn write_setup_codebook_vq(w: &mut BitWriter) {
     w.write_u32(1, 4); // lookup_type = 1
     write_vorbis_float(w, VQ_MIN);
     write_vorbis_float(w, VQ_DELTA);
-    w.write_u32(2, 4); // value_bits - 1 = 2 → 3 bits
+    w.write_u32(3, 4); // value_bits - 1 = 3 → 4 bits (need to hold 0..10)
     w.write_bit(false); // sequence_p
     for m in 0..VQ_VALUES_PER_DIM {
-        w.write_u32(m, 3);
+        w.write_u32(m, 4);
     }
 }
 
@@ -334,11 +383,22 @@ fn write_residue_section(w: &mut BitWriter, end: u32, classbook: u32, vqbook: u3
     w.write_u32(vqbook, 8);
 }
 
-/// Write a mapping with no coupling, 1 submap, specified floor + residue.
-fn write_mapping_section(w: &mut BitWriter, floor_idx: u32, residue_idx: u32) {
+/// Write a mapping with optional channel coupling, 1 submap, specified
+/// floor + residue. When `couple_stereo` is true the mapping declares one
+/// coupling step (magnitude=0, angle=1) and the audio_channels MUST be 2 —
+/// the decoder applies inverse coupling per Vorbis I §1.3.3 and §9.2.
+fn write_mapping_section(w: &mut BitWriter, floor_idx: u32, residue_idx: u32, couple_stereo: bool) {
     w.write_u32(0, 16); // mapping type = 0
     w.write_bit(false); // submaps flag = 0 → 1 submap
-    w.write_bit(false); // coupling flag = 0 → no coupling
+    if couple_stereo {
+        w.write_bit(true); // coupling flag = 1
+        w.write_u32(0, 8); // coupling steps - 1 = 0 → 1 step
+                           // For 2 channels, ilog(channels-1)=ilog(1)=1 bit per field.
+        w.write_u32(0, 1); // magnitude = ch 0
+        w.write_u32(1, 1); // angle = ch 1
+    } else {
+        w.write_bit(false);
+    }
     w.write_u32(0, 2); // reserved
                        // submap 0:
     w.write_u32(0, 8); // time index (discarded)
@@ -348,9 +408,13 @@ fn write_mapping_section(w: &mut BitWriter, floor_idx: u32, residue_idx: u32) {
 
 /// Build our own setup header: 3 codebooks (Y, class, VQ); 2 floors
 /// (short + long); 2 residues (short + long); 2 mappings (short + long);
-/// 2 modes (short = blockflag 0, long = blockflag 1).
-pub fn build_encoder_setup_header(_channels: u8) -> Vec<u8> {
+/// 2 modes (short = blockflag 0, long = blockflag 1). For stereo
+/// (`channels == 2`) the mappings declare one coupling step (mag=0,
+/// ang=1) — the encoder applies forward sum/difference coupling before
+/// residue coding, the decoder applies the inverse before IMDCT.
+pub fn build_encoder_setup_header(channels: u8) -> Vec<u8> {
     let extra_x_long = long_floor_extra_x();
+    let couple = channels == 2;
     let mut w = BitWriter::with_capacity(512);
     for &b in &[0x05u32, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73] {
         w.write_u32(b, 8);
@@ -382,8 +446,8 @@ pub fn build_encoder_setup_header(_channels: u8) -> Vec<u8> {
 
     // 2 mappings.
     w.write_u32(2 - 1, 6);
-    write_mapping_section(&mut w, 0, 0);
-    write_mapping_section(&mut w, 1, 1);
+    write_mapping_section(&mut w, 0, 0, couple);
+    write_mapping_section(&mut w, 1, 1, couple);
 
     // 2 modes.
     w.write_u32(2 - 1, 6);
@@ -483,9 +547,11 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
         out_params,
         time_base: TimeBase::new(1, sample_rate as i64),
         channels,
+        sample_rate,
         blocksize_short,
         blocksize_long,
         input_buf: vec![Vec::with_capacity(blocksize_long * 4); channels as usize],
+        prev_tail: vec![Vec::with_capacity(blocksize_long); channels as usize],
         output_queue: VecDeque::new(),
         pts: 0,
         blocks_emitted: 0,
@@ -504,9 +570,15 @@ struct VorbisEncoder {
     out_params: CodecParameters,
     time_base: TimeBase,
     channels: u16,
+    sample_rate: u32,
+    #[allow(dead_code)]
     blocksize_short: usize,
     blocksize_long: usize,
     input_buf: Vec<Vec<f32>>,
+    /// Per-channel "right half of the last block we emitted". Used as the
+    /// left half of the next block so consecutive windows overlap by N/2,
+    /// which is what the decoder's sin/sin OLA assumes.
+    prev_tail: Vec<Vec<f32>>,
     output_queue: VecDeque<Packet>,
     pts: i64,
     blocks_emitted: u64,
@@ -577,23 +649,54 @@ impl VorbisEncoder {
         Ok(())
     }
 
-    /// Emit long-block packets as long as enough input is buffered. Short
-    /// blocks are only used for the final leftover if it's smaller than a
-    /// long block. This policy keeps the encoder simple: the majority of
-    /// packets are long blocks carrying 2048-sample IMDCTs.
+    /// Emit long-block packets as long as enough input is buffered. Each
+    /// block is an N-sample window that advances by N/2 (so consecutive
+    /// blocks overlap by N/2 — required for correct sin/sin OLA at the
+    /// decoder, see Vorbis I §1.3.4). The first block of the stream pads
+    /// its left half with zeros (the decoder discards left-half output of
+    /// the first packet anyway, so this is a free choice).
     fn drain_blocks(&mut self) {
-        while self.input_buf[0].len() >= self.blocksize_long {
-            self.emit_one_block(self.blocksize_long, /*long=*/ true);
+        let n = self.blocksize_long;
+        let half = n / 2;
+        loop {
+            // Need `half` samples of NEW data plus `half` samples already
+            // produced (which sit in `prev_tail`). Equivalently: input_buf
+            // must hold at least `half` samples.
+            if self.input_buf[0].len() < half {
+                return;
+            }
+            self.emit_one_block(n, /*long=*/ true);
         }
     }
 
     fn emit_one_block(&mut self, n: usize, long: bool) {
-        let mut block: Vec<Vec<f32>> = Vec::with_capacity(self.channels as usize);
-        for ch in 0..self.channels as usize {
+        let half = n / 2;
+        let n_channels = self.channels as usize;
+        let mut block: Vec<Vec<f32>> = Vec::with_capacity(n_channels);
+        for ch in 0..n_channels {
             let mut v = Vec::with_capacity(n);
-            v.extend_from_slice(&self.input_buf[ch][..n]);
+            // Left half: take from `prev_tail` (last N/2 samples of the
+            // previous block's window). Empty for the very first block →
+            // pad with zeros so the window's left transition fades from
+            // silence.
+            let tail = self.prev_tail[ch].as_slice();
+            if tail.len() >= half {
+                v.extend_from_slice(&tail[tail.len() - half..]);
+            } else {
+                v.resize(half - tail.len(), 0.0);
+                v.extend_from_slice(tail);
+            }
+            // Right half: pull `half` samples from `input_buf` (or zero-pad
+            // if we're flushing a partial trailing block).
+            let take = self.input_buf[ch].len().min(half);
+            v.extend_from_slice(&self.input_buf[ch][..take]);
+            v.resize(n, 0.0);
+            // Save the right half as next block's left half.
+            self.prev_tail[ch].clear();
+            self.prev_tail[ch].extend_from_slice(&v[half..]);
+            // Advance input_buf by `take` samples.
+            self.input_buf[ch].drain(..take);
             block.push(v);
-            self.input_buf[ch].drain(..n);
         }
         let pkt = self.encode_block_packet(&block, n, long);
         self.output_queue.push_back(pkt);
@@ -667,9 +770,14 @@ impl VorbisEncoder {
         let mode = &self.setup.modes[mode_idx];
         let mapping = &self.setup.mappings[mode.mapping as usize];
 
-        // Build the window for this block.
+        // Build the window for this block. Since we currently always emit
+        // long blocks back-to-back, `prev_long` and `next_long` both
+        // default to `true` (full long-long-long sin-window pattern). The
+        // very first block of the stream has no predecessor so prev_long
+        // = false there. Look-ahead-driven short-block switching would
+        // override these flags.
         let prev_long = if long { self.prev_block_long } else { false };
-        let next_long = false; // conservative — we don't know the next block
+        let next_long = long; // assume next block is long; true for steady-state long-only
         let window = build_window(n, long, prev_long, next_long);
 
         // Per-channel: window × forward MDCT → floor analysis → residue.
@@ -716,7 +824,7 @@ impl VorbisEncoder {
                     peak_bin
                 );
             }
-            let target_y = analyse_floor1(&floor_struct, &spec, n_half);
+            let target_y = analyse_floor1(&floor_struct, &spec, n_half, self.sample_rate);
             let codes = compute_floor1_codes(&floor_struct, &target_y);
             let mut curve = vec![1f32; n_half];
             let decoded = crate::floor::Floor1Decoded {
@@ -753,6 +861,28 @@ impl VorbisEncoder {
             }
             floor_codes.push(codes);
             residues.push(residue);
+        }
+
+        // Forward channel coupling. The decoder applies inverse coupling on
+        // the residue spectrum (Vorbis I §1.3.3) before multiplying by the
+        // per-channel floor curve. So we must transform our per-channel
+        // residues into (magnitude, angle) form here so that the decoder
+        // recovers the original L/R residue exactly. See `forward_couple`
+        // for the case-by-case derivation; together with `decoder.rs`'s
+        // inverse this round-trips losslessly.
+        for &(mag, ang) in &mapping.coupling {
+            let mi = mag as usize;
+            let ai = ang as usize;
+            if mi >= residues.len() || ai >= residues.len() || mi == ai {
+                continue;
+            }
+            for k in 0..n_half {
+                let l = residues[mi][k];
+                let r = residues[ai][k];
+                let (m, a) = forward_couple(l, r);
+                residues[mi][k] = m;
+                residues[ai][k] = a;
+            }
         }
 
         let residue_idx = mapping.submap_residue[0] as usize;
@@ -900,7 +1030,8 @@ impl VorbisEncoder {
                                         target[j] = vectors[ch][bin + j];
                                     }
                                 }
-                                let entry = vq_search(book, &target[..dim]).ok()?;
+                                let entry =
+                                    vq_search(book, &target[..dim], VQ_USED_ENTRIES).ok()?;
                                 write_huffman(w, book, entry);
                                 bin += dim;
                             }
@@ -1034,12 +1165,56 @@ fn pick_delta(predicted: i32, target: i32, room: i32) -> (i32, i32) {
     (val, recovered)
 }
 
+/// Vorbis forward channel coupling (sign-coded sum/difference).
+///
+/// Given the per-bin residue values `(l, r)` for the left/right channels,
+/// produce the magnitude/angle pair `(m, a)` such that the decoder's
+/// inverse coupling (`crate::decoder` lines ~240-260) recovers `(l, r)`
+/// bit-exactly. The forward rules are derived case-by-case from the
+/// inverse:
+///
+/// - `m > 0, a > 0`  ⇒ inverse `(m, m - a)`  ⇒ forward when `l > 0 ∧ l > r`: `m=l, a=l-r`
+/// - `m > 0, a ≤ 0`  ⇒ inverse `(m + a, m)`  ⇒ forward when `r > 0 ∧ l ≤ r`: `m=r, a=l-r`
+/// - `m ≤ 0, a > 0`  ⇒ inverse `(m, m + a)`  ⇒ forward when `l ≤ 0 ∧ r > l`: `m=l, a=r-l`
+/// - `m ≤ 0, a ≤ 0`  ⇒ inverse `(m - a, m)`  ⇒ forward when `r ≤ 0 ∧ l ≥ r`: `m=r, a=r-l`
+///
+/// Boundary cases (zeros, equal signs) are absorbed by the `≤` / `≥`
+/// breakdowns. Verified by encode → decode → assert_eq for spot-check
+/// inputs in the unit test suite.
+fn forward_couple(l: f32, r: f32) -> (f32, f32) {
+    if l >= 0.0 && r >= 0.0 {
+        if l >= r {
+            (l, l - r)
+        } else {
+            (r, l - r)
+        }
+    } else if l <= 0.0 && r <= 0.0 {
+        if l >= r {
+            (r, r - l)
+        } else {
+            (l, r - l)
+        }
+    } else if l <= 0.0 {
+        // l<=0, r>0 (signs differ).
+        (l, r - l)
+    } else {
+        // l>0, r<=0.
+        (r, r - l)
+    }
+}
+
 /// Exhaustive nearest-neighbour VQ search over `book`'s entries. Returns
 /// the entry index minimising the squared-error distance to `target`.
-fn vq_search(book: &Codebook, target: &[f32]) -> Result<u32> {
+///
+/// `max_entries` caps the search range when the codebook is "padded" — our
+/// 128-entry/121-used VQ book pads with unreferenced grid wraparound
+/// entries (see [`VQ_USED_ENTRIES`]). Pass `book.entries` for unrestricted
+/// search.
+fn vq_search(book: &Codebook, target: &[f32], max_entries: u32) -> Result<u32> {
     let mut best_e = 0u32;
     let mut best_d = f32::MAX;
-    for e in 0..book.entries {
+    let limit = max_entries.min(book.entries);
+    for e in 0..limit {
         if book.codeword_lengths[e as usize] == 0 {
             continue;
         }
@@ -1057,27 +1232,90 @@ fn vq_search(book: &Codebook, target: &[f32]) -> Result<u32> {
     Ok(best_e)
 }
 
-/// Per-post Y quantisation: for each X post, look at the local spectrum
-/// magnitude and choose the Y in 0..127 whose `FLOOR1_INVERSE_DB[Y*mult]`
-/// is closest in log space to that magnitude.
-fn analyse_floor1(floor: &Floor1, spec: &[f32], n_half: usize) -> Vec<i32> {
+/// Floor scaling factor: the target floor is set to peak_local / FLOOR_SCALE
+/// so the residue VQ has headroom to encode bins above the floor in the
+/// {-5..5} range. Empirically `4.0` balances residue saturation against
+/// quantisation noise at the low end. Smaller values shift more energy
+/// into the residue (better SNR) but risk clipping the strongest peaks.
+const FLOOR_SCALE: f32 = 4.0;
+
+/// Bare-minimum absolute-threshold-of-hearing (ATH) curve. Returns a
+/// linear-magnitude floor *minimum* in our spectrum-amplitude units (i.e.
+/// post-`fwd_scale`). Bins with magnitude below this can be set to a small
+/// floor without audible loss — saving residue bits.
+///
+/// Coarse two-piece fit: high-pass roll-off below ~50 Hz and above
+/// ~16 kHz brought up to about -40 dB. In the speech/music midband
+/// (200 Hz..6 kHz), the threshold is small (-80 dB) so we don't over-floor
+/// the audible content.
+fn ath_min_for_bin(bin: usize, n_half: usize, sample_rate: u32) -> f32 {
+    let nyquist = sample_rate as f32 * 0.5;
+    let freq = (bin as f32 / n_half as f32) * nyquist;
+    // Three break points: 100 Hz, 1 kHz, 10 kHz.
+    let db = if freq < 100.0 {
+        // Below 100 Hz: -30 dB rising fast as freq -> 0.
+        -30.0 + (freq / 100.0).max(0.01) * 20.0
+    } else if freq < 1000.0 {
+        // 100 Hz - 1 kHz: -50 to -75 dB.
+        -50.0 - (freq - 100.0) / 900.0 * 25.0
+    } else if freq < 8000.0 {
+        // 1 kHz - 8 kHz: ~-80 dB midband.
+        -80.0
+    } else {
+        // 8 kHz - Nyquist: -80 dB rising back to -40 dB.
+        -80.0 + ((freq - 8000.0) / (nyquist - 8000.0).max(1.0)).clamp(0.0, 1.0) * 40.0
+    };
+    10f32.powf(db / 20.0)
+}
+
+/// Per-post Y quantisation. For each X post, look at the spectrum across
+/// the entire span to that post's nearest neighbours (so no spectral peak
+/// is invisible to the floor sampling), divide by `FLOOR_SCALE` for
+/// residue headroom, and apply an ATH floor minimum.
+fn analyse_floor1(floor: &Floor1, spec: &[f32], n_half: usize, sample_rate: u32) -> Vec<i32> {
     let xlist = &floor.xlist;
-    let mut y = Vec::with_capacity(xlist.len());
+    let n_posts = xlist.len();
+    // Sort posts by X position so we can look up neighbours easily.
+    let mut order: Vec<usize> = (0..n_posts).collect();
+    order.sort_by_key(|&i| xlist[i]);
+    // For each post in original index order, find the X-coord of the
+    // nearest post on each side (in sorted order) so we can scan the
+    // full spectral window between neighbouring posts.
+    let mut neighbour_lo = vec![0usize; n_posts];
+    let mut neighbour_hi = vec![n_half; n_posts];
+    for (rank, &idx) in order.iter().enumerate() {
+        let here = xlist[idx] as usize;
+        let lo = if rank == 0 {
+            0
+        } else {
+            (xlist[order[rank - 1]] as usize + here) / 2
+        };
+        let hi = if rank + 1 == n_posts {
+            n_half
+        } else {
+            (xlist[order[rank + 1]] as usize + here).div_ceil(2)
+        };
+        neighbour_lo[idx] = lo;
+        neighbour_hi[idx] = hi.min(n_half);
+    }
+
+    let mut y = Vec::with_capacity(n_posts);
     let mult = floor.multiplier as usize;
-    for &x in xlist {
+    for (i, &x) in xlist.iter().enumerate() {
         let bin = (x as usize).min(n_half.saturating_sub(1));
-        // Peak magnitude in a small window around `bin` so narrowband
-        // sinusoids aren't missed by our sparse post grid.
-        let lo = bin.saturating_sub(4);
-        let hi = (bin + 4).min(n_half);
+        let lo = neighbour_lo[i];
+        let hi = neighbour_hi[i].max(lo + 1);
         let mut mag = 0f32;
-        for v in &spec[lo..hi] {
+        for v in &spec[lo..hi.min(spec.len())] {
             let a = v.abs();
             if a > mag {
                 mag = a;
             }
         }
-        let target = mag.max(1e-30).ln();
+        // Scale floor down so the residue has headroom in [-5, 5] units.
+        let ath = ath_min_for_bin(bin, n_half, sample_rate);
+        let target_mag = (mag / FLOOR_SCALE).max(ath).max(1e-30);
+        let target = target_mag.ln();
         let mut best_y = 0i32;
         let mut best_diff = f32::MAX;
         for cand in 0..128 {
@@ -1132,21 +1370,17 @@ impl Encoder for VorbisEncoder {
         if self.flushed {
             return Ok(());
         }
-        // Drain any whole long blocks still buffered.
+        // Drain whole blocks from the regular pipeline.
         self.drain_blocks();
-        // Pad the trailing partial block (if any) with zeros and emit it.
+        // Emit one final block (zero-padded right half) so the decoder's
+        // final OLA pass produces samples for the last full half-block of
+        // input. This matches the Vorbis convention: the trailing block is
+        // a "phantom" — same-size as the previous block, with no real new
+        // input. Without it the very last `blocksize_long/2` samples of
+        // input stay locked in `prev_tail` and the decoder never sees them.
         let pending = self.input_buf[0].len();
-        if pending > 0 {
-            let target = if pending <= self.blocksize_short {
-                self.blocksize_short
-            } else {
-                self.blocksize_long
-            };
-            for ch in 0..self.channels as usize {
-                self.input_buf[ch].resize(target, 0.0);
-            }
-            let long = target == self.blocksize_long;
-            self.emit_one_block(target, long);
+        if pending > 0 || !self.prev_tail[0].is_empty() {
+            self.emit_one_block(self.blocksize_long, true);
         }
         self.flushed = true;
         Ok(())
@@ -1194,8 +1428,8 @@ mod tests {
         assert_eq!(setup.residues.len(), 2);
         assert_eq!(setup.mappings.len(), 2);
         assert_eq!(setup.modes.len(), 2);
-        // Codebook 2 must be the dim-2 VQ, 64 entries.
-        assert_eq!(setup.codebooks[2].entries, 64);
+        // Codebook 2 must be the dim-2 VQ, 128 entries (full Huffman tree).
+        assert_eq!(setup.codebooks[2].entries, VQ_ENTRIES);
         assert_eq!(setup.codebooks[2].dimensions, 2);
         let vq = setup.codebooks[2].vq.as_ref().unwrap();
         assert_eq!(vq.lookup_type, 1);
@@ -1208,8 +1442,98 @@ mod tests {
         let setup = parse_setup(&bytes, 2).expect("encoder setup parses stereo");
         assert_eq!(setup.codebooks.len(), 3);
         assert_eq!(setup.mappings.len(), 2);
-        // No coupling.
-        assert_eq!(setup.mappings[0].coupling.len(), 0);
+        // Stereo: 1 coupling step (mag=0, ang=1).
+        assert_eq!(setup.mappings[0].coupling.len(), 1);
+        assert_eq!(setup.mappings[0].coupling[0], (0, 1));
+        assert_eq!(setup.mappings[1].coupling[0], (0, 1));
+    }
+
+    #[test]
+    fn analyse_floor1_captures_peak_between_posts() {
+        // Build a floor with sparse posts (every 64 bins) and a spectrum
+        // with a single peak smack in the middle of two posts. The new
+        // analyser should pick it up.
+        let n_half = 1024usize;
+        let mut spec = vec![0f32; n_half];
+        spec[200] = 1.0; // peak between posts at 192 and 256 (long_floor_extra_x has post at ~192)
+        let bytes = build_encoder_setup_header(1);
+        let setup = parse_setup(&bytes, 1).expect("parse setup");
+        let f = match &setup.floors[1] {
+            Floor::Type1(f) => f.clone(),
+            _ => panic!("expected floor1"),
+        };
+        let y = analyse_floor1(&f, &spec, n_half, 48_000);
+        // Find the post nearest bin 200.
+        let mut best = (usize::MAX, usize::MAX);
+        for (i, &x) in f.xlist.iter().enumerate() {
+            let d = (x as i32 - 200).unsigned_abs() as usize;
+            if d < best.1 {
+                best = (i, d);
+            }
+        }
+        // That post must have a non-trivial Y (peak got captured, not 0).
+        assert!(
+            y[best.0] > 50,
+            "expected captured peak Y > 50, got {} at post idx {}",
+            y[best.0],
+            best.0
+        );
+    }
+
+    #[test]
+    fn forward_couple_roundtrips_via_decoder_inverse() {
+        // Mirror of the inverse coupling code in `crate::decoder`. We must
+        // round-trip every (l, r) ∈ {-2..2}² through forward_couple →
+        // inverse_couple and recover the input bit-exactly.
+        fn inverse_couple(m: f32, a: f32) -> (f32, f32) {
+            if m > 0.0 {
+                if a > 0.0 {
+                    (m, m - a)
+                } else {
+                    (m + a, m)
+                }
+            } else if a > 0.0 {
+                (m, m + a)
+            } else {
+                (m - a, m)
+            }
+        }
+        for li in -3..=3 {
+            for ri in -3..=3 {
+                let l = li as f32;
+                let r = ri as f32;
+                let (m, a) = forward_couple(l, r);
+                let (lp, rp) = inverse_couple(m, a);
+                assert_eq!(
+                    (lp, rp),
+                    (l, r),
+                    "l={}, r={}, m={}, a={}, decoded=({}, {})",
+                    l,
+                    r,
+                    m,
+                    a,
+                    lp,
+                    rp
+                );
+            }
+        }
+        // Also check fractional inputs.
+        for &(l, r) in &[
+            (0.0f32, 0.0),
+            (1.0, 1.0),
+            (-1.0, -1.0),
+            (0.5, -0.5),
+            (-0.25, 0.75),
+            (2.5, -1.875),
+            (1e-5, -1e-5),
+        ] {
+            let (m, a) = forward_couple(l, r);
+            let (lp, rp) = inverse_couple(m, a);
+            assert!(
+                (lp - l).abs() < 1e-6 && (rp - r).abs() < 1e-6,
+                "fractional ({l}, {r}) → ({m}, {a}) → ({lp}, {rp})"
+            );
+        }
     }
 
     #[test]
@@ -1290,7 +1614,10 @@ mod tests {
             data: vec![vec![0u8; block * 2]],
         });
         enc.send_frame(&frame).expect("send_frame");
-        let pkt = enc.receive_packet().expect("packet");
+        // With overlapping windows (advance N/2 per block), N samples of
+        // input yields TWO long-block packets that share the middle N/2
+        // samples. Both should be tiny silent packets.
+        let pkt = enc.receive_packet().expect("packet 0");
         assert_eq!(pkt.pts, Some(0));
         assert_eq!(pkt.duration, Some(block as i64));
         // Silent packet: header bit + mode (1) + prev_long + next_long +
@@ -1300,6 +1627,7 @@ mod tests {
             "silent packet too big: {}",
             pkt.data.len()
         );
+        let _pkt2 = enc.receive_packet().expect("packet 1 (overlap)");
         assert!(matches!(enc.receive_packet(), Err(Error::NeedMore)));
     }
 
