@@ -64,6 +64,21 @@ pub struct NbDecoder {
     first: bool,
     /// Tracks DTX (discontinuous transmission) state for sub-mode 1.
     dtx_enabled: bool,
+    /// Per-subframe synthesis-filter DC gain Π(1 - a_k) at ω=π
+    /// (i.e. evaluated at Nyquist). Mirrors `st->pi_gain[sub]` — used
+    /// by the wideband SB-CELP extension to balance the high-band
+    /// excitation against the NB synthesis envelope.
+    pi_gain: [f32; NB_NB_SUBFRAMES],
+    /// Per-subframe RMS of the combined excitation — mirrors
+    /// `st->exc_rms[sub]`. Used as the `el` scalar in SB-CELP
+    /// high-band stochastic gain decoding.
+    exc_rms_sub: [f32; NB_NB_SUBFRAMES],
+    /// Per-sample innovation (fixed codebook contribution only, not
+    /// scaled by the adaptive excitation) for the current frame.
+    /// Mirrors the `SPEEX_SET_INNOVATION_SAVE` buffer that SB-CELP
+    /// aliases into `out + frame_size` to drive the spectral-folding
+    /// excitation path.
+    innov: [f32; NB_FRAME_SIZE],
 }
 
 impl Default for NbDecoder {
@@ -86,7 +101,30 @@ impl NbDecoder {
             seed: 1000,
             first: true,
             dtx_enabled: false,
+            pi_gain: [0.0; NB_NB_SUBFRAMES],
+            exc_rms_sub: [0.0; NB_NB_SUBFRAMES],
+            innov: [0.0; NB_FRAME_SIZE],
         }
+    }
+
+    /// Per-subframe Π-gain of the interpolated synthesis filter
+    /// (read-only view). Used by the wideband SB-CELP layer to
+    /// balance high-band excitation relative to the low-band envelope.
+    pub fn pi_gain(&self) -> &[f32; NB_NB_SUBFRAMES] {
+        &self.pi_gain
+    }
+
+    /// Per-subframe RMS of the NB excitation (read-only view). Used by
+    /// the SB-CELP layer as the `el` scalar in stochastic gain decoding.
+    pub fn exc_rms(&self) -> &[f32; NB_NB_SUBFRAMES] {
+        &self.exc_rms_sub
+    }
+
+    /// Per-sample innovation (fixed-codebook contribution) for the
+    /// most recently decoded frame. Used by the SB-CELP spectral-folding
+    /// excitation path.
+    pub fn innov(&self) -> &[f32; NB_FRAME_SIZE] {
+        &self.innov
     }
 
     /// Decode one Speex narrowband frame. The bitstream may include a
@@ -158,6 +196,7 @@ impl NbDecoder {
             innov_gain = (innov_gain / NB_FRAME_SIZE as f32).sqrt();
             for i in 0..NB_FRAME_SIZE {
                 self.exc_buf[exc_start + i] = speex_rand(innov_gain, &mut self.seed);
+                self.innov[i] = self.exc_buf[exc_start + i];
             }
             // Bandwidth-expand the previous LPCs by 0.93.
             let mut lpc = [0.0f32; NB_ORDER];
@@ -175,6 +214,13 @@ impl NbDecoder {
                 NB_ORDER,
                 &mut self.mem_sp,
             );
+            // No excitation updates per sub-frame: flat envelope.
+            for sub in 0..NB_NB_SUBFRAMES {
+                self.pi_gain[sub] = pi_gain_of(&lpc, NB_ORDER);
+                let start = sub * NB_SUBFRAME_SIZE;
+                self.exc_rms_sub[sub] =
+                    rms(&self.exc_buf[exc_start + start..exc_start + start + NB_SUBFRAME_SIZE]);
+            }
             self.first = true;
             self.shift_exc_buffer();
             return Ok(());
@@ -317,7 +363,11 @@ impl NbDecoder {
             // and SHL32-by-1 are no-ops in float mode of the reference).
             for i in 0..NB_SUBFRAME_SIZE {
                 self.exc_buf[exc_idx + i] = exc_out[i] + innov[i];
+                self.innov[offset_in_frame + i] = innov[i];
             }
+            // ---- Save combined-excitation RMS for SB-CELP. ----------
+            // Reference: `st->exc_rms[sub] = compute_rms16(exc, ...)`.
+            self.exc_rms_sub[sub] = rms(&self.exc_buf[exc_idx..exc_idx + NB_SUBFRAME_SIZE]);
         }
 
         // ---- Copy excitation into `out` (NO postfilter for now) ------
@@ -357,6 +407,11 @@ impl NbDecoder {
                 NB_ORDER,
                 &mut self.mem_sp,
             );
+            // Save the per-subframe synthesis filter Π-gain at ω=π
+            // (evaluated using the just-computed coefficients). Used by
+            // the SB-CELP high-band extension. Reference `nb_celp.c`
+            // does this with the same formula.
+            self.pi_gain[sub] = pi_gain_of(&ak, NB_ORDER);
             // Update interp_qlpc to current sub-frame's coefficients
             // for the *next* sub-frame's filter pass — matches the
             // reference (it stores `ak` into `interp_qlpc` after each
@@ -503,7 +558,14 @@ fn noise_codebook_unquant(exc: &mut [f32; NB_SUBFRAME_SIZE], seed: &mut u32) {
 
 /// `iir_mem16` from `filters.c` (float path). LPC synthesis filter:
 /// `y[i] = x[i] - sum(den[k] * y[i-k-1])`. Memory is order-long.
-fn iir_mem16(x: &[f32], den: &[f32], y: &mut [f32], n: usize, ord: usize, mem: &mut [f32]) {
+pub(crate) fn iir_mem16(
+    x: &[f32],
+    den: &[f32],
+    y: &mut [f32],
+    n: usize,
+    ord: usize,
+    mem: &mut [f32],
+) {
     debug_assert!(mem.len() >= ord);
     for i in 0..n {
         let yi = x[i] + mem[0];
@@ -516,6 +578,35 @@ fn iir_mem16(x: &[f32], den: &[f32], y: &mut [f32], n: usize, ord: usize, mem: &
         // runaway in degenerate streams).
         y[i] = yi.clamp(-32767.0, 32767.0);
     }
+}
+
+/// Root-mean-square of a sample window — mirrors `compute_rms16` in
+/// `libspeex/filters.c`. Float mode: trivial.
+pub(crate) fn rms(x: &[f32]) -> f32 {
+    if x.is_empty() {
+        return 0.0;
+    }
+    let mut s = 0.0f32;
+    for &v in x {
+        s += v * v;
+    }
+    (s / x.len() as f32).sqrt()
+}
+
+/// Evaluate the LPC synthesis filter Π-gain at ω=π (Nyquist) — a scalar
+/// equal to `1 + Σ_k (-1)^(k+1) a_k` (reference `nb_celp.c` uses
+/// `LPC_SCALING + SUB32(a[i+1], a[i])` over even indices, which is the
+/// same thing for an even-order LPC). Used by the sub-band wideband
+/// layer to balance the high-band excitation gain against the low-band
+/// filter response.
+pub(crate) fn pi_gain_of(ak: &[f32], order: usize) -> f32 {
+    let mut g = 1.0f32;
+    let mut i = 0;
+    while i + 1 < order {
+        g += ak[i + 1] - ak[i];
+        i += 2;
+    }
+    g
 }
 
 /// Linear-congruential PRNG from `math_approx.h`. The reference scales

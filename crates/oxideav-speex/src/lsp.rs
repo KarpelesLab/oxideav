@@ -15,6 +15,7 @@
 
 use crate::bitreader::BitReader;
 use crate::lsp_tables_nb::{CDBK_NB, CDBK_NB_HIGH1, CDBK_NB_HIGH2, CDBK_NB_LOW1, CDBK_NB_LOW2};
+use crate::lsp_tables_wb::{HIGH_LSP_CDBK, HIGH_LSP_CDBK2};
 use oxideav_core::Result;
 
 /// Initial linear LSP value for stage `i` (radians). Matches
@@ -80,6 +81,36 @@ pub fn lsp_unquant_nb(lsp: &mut [f32], order: usize, br: &mut BitReader) -> Resu
     let id = br.read_u32(6)? as usize;
     for i in 0..5 {
         lsp[i + 5] += (CDBK_NB_HIGH2[id * 5 + i] as f32) / 1024.0;
+    }
+    Ok(())
+}
+
+/// High-band LSP initial value. Mirrors `LSP_LINEAR_HIGH(i) = 0.3125*i + 0.75`
+/// in `quant_lsp.c` (float path). Spans roughly [0.75, 2.9375] radians for
+/// an 8-order wideband filter, which is the upper half of the full-band
+/// [0, π] range since the high band covers 4–8 kHz at 16 kHz sample rate.
+#[inline]
+fn lsp_linear_high(i: usize) -> f32 {
+    0.3125 * i as f32 + 0.75
+}
+
+/// Float `lsp_unquant_high` — two-stage VQ used by the wideband SB-CELP
+/// layer for every WB sub-mode. Reads 12 bits total (2 × 6) with a
+/// linear initial guess spanning the high band's spectral range.
+pub fn lsp_unquant_high(lsp: &mut [f32], order: usize, br: &mut BitReader) -> Result<()> {
+    debug_assert_eq!(order, 8, "Speex wideband high-band uses 8th-order LSP");
+    for i in 0..order {
+        lsp[i] = lsp_linear_high(i);
+    }
+
+    let id = br.read_u32(6)? as usize;
+    for i in 0..order {
+        lsp[i] += (HIGH_LSP_CDBK[id * order + i] as f32) / 256.0;
+    }
+
+    let id = br.read_u32(6)? as usize;
+    for i in 0..order {
+        lsp[i] += (HIGH_LSP_CDBK2[id * order + i] as f32) / 512.0;
     }
     Ok(())
 }

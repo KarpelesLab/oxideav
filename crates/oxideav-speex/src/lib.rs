@@ -7,9 +7,16 @@
 //!   * Float-mode CELP decoder for narrowband (NB) streams covering
 //!     sub-modes 1..=7 (silence/vocoder, 5.95k, 8k, 11k, 15k, 18.2k,
 //!     24.6k) and sub-mode 8 (3.95k vocoder + algebraic codebook).
-//!     Wideband (sub-band CELP) is **not yet** implemented; WB streams
-//!     return `Error::Unsupported` naming the missing piece (QMF
-//!     synthesis, see `libspeex/sb_celp.c`).
+//!   * Float-mode sub-band CELP decoder for wideband (16 kHz) streams
+//!     — WB sub-modes 1..=4, QMF synthesis bank, high-band LSP & LPC
+//!     synthesis, stochastic codebook + spectral-folding excitation.
+//!     See [`wb_decoder`] and [`qmf`].
+//!   * Ultra-wideband (32 kHz) is **not yet** implemented; UWB streams
+//!     return `Error::Unsupported`. UWB layers a second SB-CELP stage
+//!     on top of the WB decoder (the "low band" of the UWB layer is
+//!     the WB decoder's full output), and the driver would have to
+//!     stack two QMF syntheses — a substantial extension beyond the
+//!     WB work done here.
 //!
 //! Tables (LSP, gain, fixed codebooks) are transcribed from the
 //! BSD-licensed Xiph reference (`libspeex/{lsp_tables_nb,gain_table,
@@ -33,10 +40,15 @@ pub mod decoder;
 pub mod exc_tables;
 pub mod gain_tables;
 pub mod header;
+pub mod hexc_tables;
 pub mod lsp;
 pub mod lsp_tables_nb;
+pub mod lsp_tables_wb;
 pub mod nb_decoder;
+pub mod qmf;
 pub mod submodes;
+pub mod wb_decoder;
+pub mod wb_submodes;
 
 use oxideav_codec::CodecRegistry;
 
