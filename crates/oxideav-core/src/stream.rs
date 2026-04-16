@@ -71,6 +71,21 @@ impl CodecParameters {
         }
     }
 
+    /// True when `self` and `other` have the same codec_id and core
+    /// format parameters (sample_rate/channels/sample_format for audio,
+    /// width/height/pixel_format for video). Extradata and bitrate
+    /// differences are tolerated — many containers rewrite extradata
+    /// losslessly during a copy operation.
+    pub fn matches_core(&self, other: &CodecParameters) -> bool {
+        self.codec_id == other.codec_id
+            && self.sample_rate == other.sample_rate
+            && self.channels == other.channels
+            && self.sample_format == other.sample_format
+            && self.width == other.width
+            && self.height == other.height
+            && self.pixel_format == other.pixel_format
+    }
+
     pub fn video(codec_id: CodecId) -> Self {
         Self {
             codec_id,

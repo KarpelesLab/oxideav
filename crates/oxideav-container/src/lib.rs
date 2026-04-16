@@ -15,6 +15,13 @@ pub trait Demuxer: Send {
 
     /// Read the next packet from any stream. Returns `Error::Eof` at end.
     fn next_packet(&mut self) -> Result<Packet>;
+
+    /// Hint that only the listed stream indices will be consumed by the
+    /// pipeline. Demuxers that can efficiently skip inactive streams at
+    /// the container level (e.g., MKV cluster-aware, MP4 trak-aware)
+    /// should override this. The default is a no-op — the pipeline
+    /// drops unwanted packets on the floor.
+    fn set_active_streams(&mut self, _indices: &[u32]) {}
 }
 
 /// Writes packets into a container.
