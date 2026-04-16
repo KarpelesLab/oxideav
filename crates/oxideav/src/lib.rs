@@ -20,6 +20,8 @@ pub use oxideav_http as http;
 
 #[cfg(feature = "aac")]
 pub use oxideav_aac as aac;
+#[cfg(feature = "amv")]
+pub use oxideav_amv as amv;
 #[cfg(feature = "audio_filter")]
 pub use oxideav_audio_filter as audio_filter;
 #[cfg(feature = "av1")]
@@ -227,6 +229,10 @@ impl Registries {
         #[cfg(feature = "webp")]
         {
             oxideav_webp::register(&mut codecs, &mut containers);
+        }
+        #[cfg(feature = "amv")]
+        {
+            oxideav_amv::register(&mut codecs, &mut containers);
         }
         #[cfg(feature = "av1")]
         {
