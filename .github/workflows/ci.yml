@@ -30,7 +30,14 @@ jobs:
 
       - name: Install SDL2 (macOS)
         if: runner.os == 'macOS'
-        run: brew install sdl2
+        run: |
+          brew install sdl2
+          # Apple Silicon Homebrew installs to /opt/homebrew, which is
+          # NOT on the default linker search path. Surface it via env.
+          PREFIX="$(brew --prefix)"
+          echo "LIBRARY_PATH=${PREFIX}/lib:${LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=${PREFIX}/lib:${DYLD_FALLBACK_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Install SDL2 (Windows)
         if: runner.os == 'Windows'
