@@ -102,15 +102,14 @@ fn count_mono_frames() {
     assert!((30..=60).contains(&frames), "frames={}", frames);
 }
 
-/// Decode the first frame of the mono clip end-to-end.
-/// Currently expected to fail (Huffman tables 8/15/16/24 missing for our
-/// 128 kbps mono sine) — kept ignored so a future agent can flip to
-/// asserting non-silent PCM once tables are populated.
+/// Decode the first frame of the mono clip end-to-end. Now that
+/// Huffman tables 7-13, 15, 16, 24 are populated this should produce a
+/// real audio frame (1152 samples, mono).
 #[test]
-#[ignore = "needs Huffman tables 8, 15, 16, 24 populated"]
 fn decode_mono_first_frame() {
     let p = Path::new("/tmp/ref-mp3-mono-cbr.mp3");
     if !p.exists() {
+        eprintln!("skipping: {} missing", p.display());
         return;
     }
     let data = fs::read(p).unwrap();
@@ -132,9 +131,139 @@ fn decode_mono_first_frame() {
     if let oxideav_core::Frame::Audio(a) = frame {
         assert_eq!(a.samples, 1152);
         assert_eq!(a.channels, 1);
+        assert_eq!(a.sample_rate, hdr.sample_rate);
     } else {
         panic!("not an audio frame");
     }
+}
+
+/// Decode the first frame of the stereo clip end-to-end.
+#[test]
+fn decode_stereo_first_frame() {
+    let p = Path::new("/tmp/ref-mp3-stereo-cbr.mp3");
+    if !p.exists() {
+        eprintln!("skipping: {} missing", p.display());
+        return;
+    }
+    let data = fs::read(p).unwrap();
+    let start = skip_id3v2(&data);
+    let offset = find_first_sync(&data, start).expect("no sync");
+    let hdr = parse_frame_header(&data[offset..]).unwrap();
+    let flen = hdr.frame_bytes().unwrap() as usize;
+
+    let params = CodecParameters::audio(CodecId::new(CODEC_ID_STR));
+    let mut dec = make_decoder(&params).unwrap();
+
+    let pkt = Packet::new(
+        0,
+        TimeBase::new(1, hdr.sample_rate as i64),
+        data[offset..offset + flen].to_vec(),
+    );
+    dec.send_packet(&pkt).expect("send_packet");
+    let frame = dec.receive_frame().expect("receive_frame");
+    if let oxideav_core::Frame::Audio(a) = frame {
+        assert_eq!(a.samples, 1152);
+        assert_eq!(a.channels, 2);
+        assert_eq!(a.sample_rate, hdr.sample_rate);
+        // Interleaved S16: 1152 samples * 2 channels * 2 bytes.
+        assert_eq!(a.data.len(), 1);
+        assert_eq!(a.data[0].len(), 1152 * 2 * 2);
+    } else {
+        panic!("not an audio frame");
+    }
+}
+
+/// Decode several frames of the mono 440 Hz tone and verify via Goertzel
+/// that the dominant frequency component is near 440 Hz with comparable
+/// magnitude to the input. The decoder warms up over the first couple of
+/// frames (bit reservoir + IMDCT overlap), so we skip the very first
+/// frame and analyse the next few.
+#[test]
+fn decode_mono_dominant_frequency_is_440hz() {
+    let p = Path::new("/tmp/ref-mp3-mono-cbr.mp3");
+    if !p.exists() {
+        eprintln!("skipping: {} missing", p.display());
+        return;
+    }
+    let data = fs::read(p).unwrap();
+    let start = skip_id3v2(&data);
+    let mut pos = find_first_sync(&data, start).expect("no sync");
+
+    let params = CodecParameters::audio(CodecId::new(CODEC_ID_STR));
+    let mut dec = make_decoder(&params).unwrap();
+
+    // Decode ~20 frames and concatenate samples.
+    let mut all_pcm: Vec<f32> = Vec::with_capacity(20 * 1152);
+    let mut sample_rate = 0u32;
+    for _ in 0..20 {
+        let Ok(hdr) = parse_frame_header(&data[pos..]) else {
+            break;
+        };
+        let Some(flen) = hdr.frame_bytes() else { break };
+        let flen = flen as usize;
+        if pos + flen > data.len() {
+            break;
+        }
+        let pkt = Packet::new(
+            0,
+            TimeBase::new(1, hdr.sample_rate as i64),
+            data[pos..pos + flen].to_vec(),
+        );
+        if dec.send_packet(&pkt).is_err() {
+            break;
+        }
+        let Ok(frame) = dec.receive_frame() else {
+            break;
+        };
+        if let oxideav_core::Frame::Audio(a) = frame {
+            sample_rate = a.sample_rate;
+            for chunk in a.data[0].chunks_exact(2) {
+                let s = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+                all_pcm.push(s);
+            }
+        }
+        pos += flen;
+    }
+    assert!(
+        all_pcm.len() >= 4 * 1152,
+        "need enough frames; got {}",
+        all_pcm.len()
+    );
+
+    // Goertzel at 440 Hz over samples after the first frame's warm-up.
+    let warmup = 1152usize;
+    let pcm = &all_pcm[warmup..];
+    let n = pcm.len();
+    let target = 440.0f32;
+    let k = (n as f32 * target / sample_rate as f32).round();
+    let omega = 2.0 * std::f32::consts::PI * k / n as f32;
+    let coeff = 2.0 * omega.cos();
+    let mut s_prev = 0.0f32;
+    let mut s_prev2 = 0.0f32;
+    for &x in pcm {
+        let s = x + coeff * s_prev - s_prev2;
+        s_prev2 = s_prev;
+        s_prev = s;
+    }
+    let power_440 = s_prev2 * s_prev2 + s_prev * s_prev - coeff * s_prev * s_prev2;
+
+    // Compute total signal energy for ratio.
+    let total_energy: f32 = pcm.iter().map(|x| x * x).sum();
+    let ratio = power_440 / (total_energy + 1e-12);
+
+    eprintln!(
+        "mono Goertzel @ 440Hz: power={:.4e} total_energy={:.4e} ratio={:.4}",
+        power_440, total_energy, ratio
+    );
+    // For a clean 440 Hz tone we expect the 440 Hz bin to dominate (the
+    // Goertzel power is ~ N/2 * |X(k)|^2 normalised). A real MP3-encoded
+    // tone leaks a little; require >= 25% of total energy at 440 Hz.
+    // Using a generous threshold so encoder/decoder noise doesn't false-fail.
+    assert!(
+        ratio > 0.25,
+        "440 Hz energy ratio too low: {:.4} (decoder may be wrong)",
+        ratio
+    );
 }
 
 /// Dump which Huffman tables the first few frames select — diagnostic

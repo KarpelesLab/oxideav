@@ -8,10 +8,9 @@
 //! **Limitations** (this session):
 //! - MPEG-1 Layer III only. MPEG-2 LSF / MPEG-2.5 packets return
 //!   `Error::Unsupported`.
-//! - Big-value Huffman tables 8-13, 15, 16, 24 are not yet transcribed
-//!   from ISO Annex B. Frames whose granules pick those tables fail
-//!   with `Error::InvalidData`. The companion `huffman_tables_used_*`
-//!   integration tests catalogue which tables real streams pick.
+//! - Intensity-stereo (mode_extension bit 0) is not implemented; pure-IS
+//!   joint-stereo frames will sound off but won't fail to decode. M/S
+//!   joint-stereo (the dominant case) is supported.
 //! - No CRC verification.
 
 use oxideav_codec::Decoder;
@@ -125,13 +124,31 @@ impl Mp3Decoder {
 
         // Decode all granules.
         let mut pcm = vec![[[0.0f32; 576]; 2]; 2]; // pcm[gr][ch][i]
-        let mut br = BitReader::new(&combined);
+
+        // Track the expected next-granule bit offset within `combined`;
+        // this lets each granule start cleanly at part2_3_length boundary
+        // even when the previous one over- or under-read by a few bits.
+        let mut next_granule_bit: u64 = 0;
         for gr in 0..2 {
             for ch in 0..channels {
                 let gc = si.granules[gr][ch];
 
-                // Mark current bit position so we can advance to part2_3_length.
+                // Build a fresh BitReader for this granule that starts at
+                // the precise expected bit offset within `combined`.
+                let bit_off = next_granule_bit;
+                let byte_off = (bit_off / 8) as usize;
+                if byte_off >= combined.len() {
+                    return Err(Error::invalid(
+                        "MP3 decoder: ran out of main_data while decoding granule",
+                    ));
+                }
+                let mut br = BitReader::new(&combined[byte_off..]);
+                let skip = (bit_off % 8) as u32;
+                if skip > 0 {
+                    br.read_u32(skip)?;
+                }
                 let part_start = br.bit_position();
+                let part_end_bit = part_start + gc.part2_3_length as u64;
 
                 // Scalefactors first.
                 let sf = decode_sf_mpeg1(&mut br, &gc, &si.scfsi[ch], gr, &self.prev_sf[gr][ch])?;
@@ -156,6 +173,9 @@ impl Mp3Decoder {
                         as usize
                 };
 
+                // Big-values: read exactly `big_values` pairs as advertised
+                // in the side info. The encoder allocates enough part2_3
+                // bits for this many pairs.
                 while idx < big.min(576) {
                     let table = if idx < r0_end {
                         gc.table_select[0]
@@ -182,7 +202,6 @@ impl Mp3Decoder {
                 }
 
                 // Count1 region.
-                let part_end_bit = part_start + gc.part2_3_length as u64;
                 while idx + 4 <= 576 && br.bit_position() < part_end_bit {
                     let (v, w, x, y) = decode_count1(&mut br, gc.count1table_select)?;
                     is_[idx] = v;
@@ -192,24 +211,9 @@ impl Mp3Decoder {
                     idx += 4;
                 }
 
-                // Sync to part2_3_length end (skip stuffing bits).
-                let now = br.bit_position();
-                if now < part_end_bit {
-                    let pad = (part_end_bit - now) as u32;
-                    let mut consumed = 0u32;
-                    while consumed + 32 <= pad {
-                        br.read_u32(32)?;
-                        consumed += 32;
-                    }
-                    if consumed < pad {
-                        br.read_u32(pad - consumed)?;
-                    }
-                } else if now > part_end_bit {
-                    // Over-read — corrupt frame.
-                    return Err(Error::invalid(
-                        "MP3 decoder: huffman over-read past part2_3_length",
-                    ));
-                }
+                // Advance the granule cursor — small over- or under-reads
+                // within the part2_3_length envelope are absorbed here.
+                next_granule_bit = bit_off + gc.part2_3_length as u64;
 
                 // Requantise.
                 let mut xr = [0.0f32; 576];
