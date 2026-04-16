@@ -22,7 +22,7 @@ use crate::bitreader::BitReader;
 use crate::frame::{parse_frame_header, ChannelMode, MpegVersion};
 use crate::huffman::{decode_count1, decode_pair};
 use crate::imdct::{imdct_granule, ImdctState};
-use crate::requantize::{antialias, ms_stereo, requantize_granule};
+use crate::requantize::{antialias, ms_stereo, reorder_short, requantize_granule};
 use crate::reservoir::Reservoir;
 use crate::scalefactor::{decode_mpeg1 as decode_sf_mpeg1, ScaleFactors};
 use crate::sfband::sfband_long;
@@ -141,6 +141,11 @@ impl Mp3Decoder {
         // Decode all granules.
         let mut pcm = vec![[[0.0f32; 576]; 2]; 2]; // pcm[gr][ch][i]
 
+        // scfsi reuse for granule 1 must read from gr=0 of the CURRENT
+        // frame (same channel), not the previous frame's gr=1. Track per-
+        // channel within this frame.
+        let mut frame_gr0_sf: [ScaleFactors; 2] = Default::default();
+
         // Track the expected next-granule bit offset within `combined`;
         // this lets each granule start cleanly at part2_3_length boundary
         // even when the previous one over- or under-read by a few bits.
@@ -166,8 +171,13 @@ impl Mp3Decoder {
                 let part_start = br.bit_position();
                 let part_end_bit = part_start + gc.part2_3_length as u64;
 
-                // Scalefactors first.
-                let sf = decode_sf_mpeg1(&mut br, &gc, &si.scfsi[ch], gr, &self.prev_sf[gr][ch])?;
+                // Scalefactors first. For gr=1, reuse from gr=0 of the
+                // SAME frame (per ISO 11172-3 §2.4.2.7), not the previous
+                // frame's gr=1.
+                let sf = decode_sf_mpeg1(&mut br, &gc, &si.scfsi[ch], gr, &frame_gr0_sf[ch])?;
+                if gr == 0 {
+                    frame_gr0_sf[ch] = sf;
+                }
                 self.prev_sf[gr][ch] = sf;
 
                 // Huffman big-value pairs.
@@ -231,18 +241,19 @@ impl Mp3Decoder {
                 // within the part2_3_length envelope are absorbed here.
                 next_granule_bit = bit_off + gc.part2_3_length as u64;
 
-                // Requantise.
+                // Requantise. Stash for stereo processing first; antialias
+                // happens later (after stereo) per ISO 11172-3 §2.4.3.4.
                 let mut xr = [0.0f32; 576];
                 requantize_granule(&is_, &mut xr, &gc, &sf, hdr.sample_rate);
-
-                // Antialias (long blocks only / mixed-block long part).
-                antialias(&mut xr, &gc);
-
-                // Stash for stereo processing.
+                // Reorder short-block coefficients from window-major to
+                // interleaved-by-window so the IMDCT sees them in the
+                // expected layout. No-op for long blocks.
+                reorder_short(&mut xr, &gc, hdr.sample_rate);
                 pcm[gr][ch] = xr;
             }
 
-            // Stereo processing on the granule (after both channels).
+            // Stereo processing on the granule (after both channels) —
+            // applied to requantised (NOT yet antialiased) coefficients.
             if channels == 2 && hdr.channel_mode == ChannelMode::JointStereo {
                 let ms_on = (hdr.mode_extension & 0x2) != 0;
                 if ms_on {
@@ -253,6 +264,13 @@ impl Mp3Decoder {
                 // Intensity stereo not yet implemented — leave as-is (MS is
                 // the dominant joint-stereo mode; pure-IS-only frames will
                 // sound off).
+            }
+
+            // Now antialias each channel (long blocks only / mixed-block
+            // long part).
+            for ch in 0..channels {
+                let gc = si.granules[gr][ch];
+                antialias(&mut pcm[gr][ch], &gc);
             }
         }
 

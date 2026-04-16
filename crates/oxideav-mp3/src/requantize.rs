@@ -119,6 +119,54 @@ fn f32_pow2(e: f32) -> f32 {
     (e * std::f32::consts::LN_2).exp()
 }
 
+// --------------- Reorder for short blocks ---------------
+
+/// Reorder short-block coefficients from window-major (sfb→win→freq, the
+/// layout produced by `requantize_granule`) to interleaved-by-window
+/// (sfb→freq→win) layout that the IMDCT short path expects. ISO 11172-3
+/// §2.4.3.4.10.5.
+///
+/// For pure short blocks, sfb 0..13 are reordered. For mixed blocks, only
+/// sfb 3..13 of the short region are reordered (sfb 0..7 are long and stay
+/// in subbands 0..1).
+pub fn reorder_short(xr: &mut [f32; 576], gc: &GranuleChannel, sample_rate: u32) {
+    if !(gc.window_switching_flag && gc.block_type == 2) {
+        return;
+    }
+    let short_bounds = sfband_short(sample_rate);
+    let (start_sfb, region_start) = if gc.mixed_block_flag {
+        // Mixed: long part covers sfb 0..7 (long sfbs), so the short
+        // region starts at long-sfb-index 8 in the granule layout.
+        // For 44.1k that's offset 36.
+        (3, sfband_long(sample_rate)[8] as usize)
+    } else {
+        (0, 0)
+    };
+    let mut buf = [0.0f32; 576];
+    let mut pos = region_start;
+    let mut sfb = start_sfb;
+    while pos < 576 && sfb < 13 {
+        let width = (short_bounds[sfb + 1] - short_bounds[sfb]) as usize;
+        // Source: window-major. xr[pos..pos + 3*width] holds win 0 (width),
+        // win 1 (width), win 2 (width).
+        // Destination: interleaved. For each freq j in 0..width and window
+        // w in 0..3, dest is at offset 3*j + w within this sfb's region.
+        for w in 0..3 {
+            for j in 0..width {
+                let src = pos + w * width + j;
+                let dst = pos + 3 * j + w;
+                if src < 576 && dst < 576 {
+                    buf[dst] = xr[src];
+                }
+            }
+        }
+        pos += 3 * width;
+        sfb += 1;
+    }
+    // Copy back the reordered region.
+    xr[region_start..576].copy_from_slice(&buf[region_start..576]);
+}
+
 // --------------- Antialias ---------------
 
 /// Antialias butterfly coefficients (ISO Table 3-B.9). c_s = cos, c_a = -sin.
@@ -130,7 +178,7 @@ const CS: [f32; 8] = [
 #[rustfmt::skip]
 const CA: [f32; 8] = [
    -0.514_495_76, -0.471_731_97, -0.313_377_46, -0.181_913_2,
-   -0.094_574_19, -0.040_965_58, -0.014_197_132,-0.003_732_740_8,
+   -0.094_574_19, -0.040_965_58, -0.014_197_132,-0.003_699_975,
 ];
 
 /// Apply the 8-tap antialias butterfly across the 18-sample boundaries

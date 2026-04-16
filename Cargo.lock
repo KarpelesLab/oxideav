@@ -229,6 +229,7 @@ dependencies = [
  "oxideav-g728",
  "oxideav-g729",
  "oxideav-gsm",
+ "oxideav-h263",
  "oxideav-h264",
  "oxideav-h265",
  "oxideav-iff",
@@ -361,6 +362,15 @@ version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-h263"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+ "oxideav-mpeg4video",
 ]
 
 [[package]]
