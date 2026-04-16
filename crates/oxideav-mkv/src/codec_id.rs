@@ -4,6 +4,32 @@
 
 use oxideav_core::CodecId;
 
+/// Matroska CodecID strings that WebM permits.
+///
+/// WebM is a restricted subset of Matroska: the WebM specification
+/// (<https://www.webmproject.org/docs/container/>) only allows VP8, VP9 and
+/// AV1 for video, and Vorbis and Opus for audio. Anything else must be
+/// rejected by a WebM muxer — writing e.g. H.264 into a DocType="webm"
+/// file produces an invalid WebM even though the container bytes are valid
+/// Matroska.
+pub const ALLOWED_WEBM_CODECS: &[&str] = &[
+    // Video.
+    "V_VP8", "V_VP9", "V_AV1", // Audio.
+    "A_VORBIS", "A_OPUS",
+];
+
+/// Return true if `matroska_codec_id` (e.g. `"A_OPUS"`) is permitted inside
+/// a WebM container.
+pub fn is_webm_matroska_codec(matroska_codec_id: &str) -> bool {
+    ALLOWED_WEBM_CODECS.contains(&matroska_codec_id)
+}
+
+/// Return true if the oxideav-internal [`CodecId`] corresponds to a codec
+/// that WebM permits. Unknown / unmapped codec ids return false.
+pub fn is_webm_codec(id: &CodecId) -> bool {
+    matches!(id.as_str(), "vp8" | "vp9" | "av1" | "vorbis" | "opus")
+}
+
 /// Best-effort mapping from a Matroska codec id string (e.g. `"A_FLAC"`) to
 /// the oxideav codec id we use internally.
 ///

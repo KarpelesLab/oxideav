@@ -28,24 +28,36 @@ use crate::ids;
 /// Cluster every ~5 seconds (in MKV ms timecode units).
 const CLUSTER_DURATION_MS: i64 = 5_000;
 
+/// Open a general Matroska muxer. Writes `DocType="matroska"` and accepts
+/// any codec the `codec_id` module maps to a known Matroska ID.
 pub fn open(output: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Box<dyn Muxer>> {
-    if streams.is_empty() {
-        return Err(Error::invalid("MKV muxer: need at least one stream"));
-    }
-    let stream_track_numbers: Vec<u64> = (0..streams.len() as u64).map(|i| i + 1).collect();
-    Ok(Box::new(MkvMuxer {
-        output,
-        streams: streams.to_vec(),
-        track_numbers: stream_track_numbers,
-        stream_pts: vec![0i64; streams.len()],
-        cluster_open: false,
-        cluster_timecode_ms: 0,
-        header_written: false,
-        trailer_written: false,
-    }))
+    MkvMuxer::new(output, streams, DocType::Matroska).map(|m| Box::new(m) as Box<dyn Muxer>)
 }
 
-struct MkvMuxer {
+/// Open a WebM muxer. Writes `DocType="webm"` and rejects codecs outside
+/// the WebM whitelist ([`crate::codec_id::ALLOWED_WEBM_CODECS`]) with
+/// [`Error::Unsupported`].
+pub fn open_webm(output: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Box<dyn Muxer>> {
+    MkvMuxer::new(output, streams, DocType::Webm).map(|m| Box::new(m) as Box<dyn Muxer>)
+}
+
+/// Which on-disk flavour the muxer writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocType {
+    Matroska,
+    Webm,
+}
+
+impl DocType {
+    fn as_str(self) -> &'static str {
+        match self {
+            DocType::Matroska => "matroska",
+            DocType::Webm => "webm",
+        }
+    }
+}
+
+pub struct MkvMuxer {
     output: Box<dyn WriteSeek>,
     streams: Vec<StreamInfo>,
     /// Per-stream MKV track numbers (1-indexed).
@@ -59,11 +71,58 @@ struct MkvMuxer {
     cluster_timecode_ms: i64,
     header_written: bool,
     trailer_written: bool,
+    doc_type: DocType,
+}
+
+impl MkvMuxer {
+    /// Construct a muxer in the given DocType flavour. Validates codec
+    /// compatibility up front for WebM.
+    fn new(output: Box<dyn WriteSeek>, streams: &[StreamInfo], doc_type: DocType) -> Result<Self> {
+        if streams.is_empty() {
+            return Err(Error::invalid("MKV muxer: need at least one stream"));
+        }
+        if doc_type == DocType::Webm {
+            for (i, s) in streams.iter().enumerate() {
+                if !codec_id::is_webm_codec(&s.params.codec_id) {
+                    return Err(Error::unsupported(format!(
+                        "WebM muxer: stream {i} uses codec '{}' which is not in the WebM whitelist (allowed: vp8, vp9, av1, vorbis, opus)",
+                        s.params.codec_id.as_str()
+                    )));
+                }
+            }
+        }
+        let stream_track_numbers: Vec<u64> = (0..streams.len() as u64).map(|i| i + 1).collect();
+        Ok(MkvMuxer {
+            output,
+            streams: streams.to_vec(),
+            track_numbers: stream_track_numbers,
+            stream_pts: vec![0i64; streams.len()],
+            cluster_open: false,
+            cluster_timecode_ms: 0,
+            header_written: false,
+            trailer_written: false,
+            doc_type,
+        })
+    }
+
+    /// Construct a plain Matroska muxer. Thin wrapper around the boxed
+    /// [`open`] factory for callers that want a concrete type back (e.g. to
+    /// introspect its state in tests).
+    pub fn new_matroska(output: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Self> {
+        Self::new(output, streams, DocType::Matroska)
+    }
+
+    /// Construct a WebM muxer. Validates codec whitelist up front; returns
+    /// [`Error::Unsupported`] on the first stream whose codec WebM does not
+    /// permit.
+    pub fn new_webm(output: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Self> {
+        Self::new(output, streams, DocType::Webm)
+    }
 }
 
 impl Muxer for MkvMuxer {
     fn format_name(&self) -> &str {
-        "matroska"
+        self.doc_type.as_str()
     }
 
     fn write_header(&mut self) -> Result<()> {
@@ -76,7 +135,9 @@ impl Muxer for MkvMuxer {
         write_uint_element(&mut ebml_body, ids::EBML_READ_VERSION, 1);
         write_uint_element(&mut ebml_body, ids::EBML_MAX_ID_LENGTH, 4);
         write_uint_element(&mut ebml_body, ids::EBML_MAX_SIZE_LENGTH, 8);
-        write_string_element(&mut ebml_body, ids::EBML_DOC_TYPE, "matroska");
+        write_string_element(&mut ebml_body, ids::EBML_DOC_TYPE, self.doc_type.as_str());
+        // WebM pins DocTypeVersion to 4 / DocTypeReadVersion to 2 as of the
+        // current spec. Matroska also sits at 4/2 for the features we emit.
         write_uint_element(&mut ebml_body, ids::EBML_DOC_TYPE_VERSION, 4);
         write_uint_element(&mut ebml_body, ids::EBML_DOC_TYPE_READ_VERSION, 2);
         let mut all = Vec::new();

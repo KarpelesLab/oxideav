@@ -16,6 +16,7 @@ default = [
     "opus",
     "flac",
     "mkv",
+    "webm",
     "mp4",
     "avi",
     "iff",
@@ -49,6 +50,9 @@ vorbis = ["dep:oxideav-vorbis"]
 opus = ["dep:oxideav-opus"]
 flac = ["dep:oxideav-flac"]
 mkv = ["dep:oxideav-mkv"]
+# WebM rides the oxideav-mkv crate — the demuxer is shared and the muxer
+# exposes a DocType="webm" mode with a VP8/VP9/AV1/Vorbis/Opus whitelist.
+webm = ["mkv"]
 mp4 = ["dep:oxideav-mp4"]
 avi = ["dep:oxideav-avi"]
 iff = ["dep:oxideav-iff"]
