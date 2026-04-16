@@ -56,6 +56,8 @@ pub use oxideav_mpeg4video as mpeg4video;
 pub use oxideav_ogg as ogg;
 #[cfg(feature = "opus")]
 pub use oxideav_opus as opus;
+#[cfg(feature = "s3m")]
+pub use oxideav_s3m as s3m;
 #[cfg(feature = "speex")]
 pub use oxideav_speex as speex;
 #[cfg(feature = "theora")]
@@ -119,6 +121,11 @@ impl Registries {
         {
             oxideav_mod::register_codecs(&mut codecs);
             oxideav_mod::register_containers(&mut containers);
+        }
+        #[cfg(feature = "s3m")]
+        {
+            oxideav_s3m::register_codecs(&mut codecs);
+            oxideav_s3m::register_containers(&mut containers);
         }
         #[cfg(feature = "mp1")]
         {

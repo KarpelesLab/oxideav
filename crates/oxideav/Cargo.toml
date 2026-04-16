@@ -20,6 +20,7 @@ default = [
     "avi",
     "iff",
     "amiga_mod",
+    "s3m",
     "mp1",
     "mp2",
     "mp3",
@@ -45,6 +46,7 @@ mp4 = ["dep:oxideav-mp4"]
 avi = ["dep:oxideav-avi"]
 iff = ["dep:oxideav-iff"]
 amiga_mod = ["dep:oxideav-mod"]
+s3m = ["dep:oxideav-s3m"]
 mp1 = ["dep:oxideav-mp1"]
 mp2 = ["dep:oxideav-mp2"]
 mp3 = ["dep:oxideav-mp3"]
@@ -75,6 +77,7 @@ oxideav-mp4 = { workspace = true, optional = true }
 oxideav-avi = { workspace = true, optional = true }
 oxideav-iff = { workspace = true, optional = true }
 oxideav-mod = { workspace = true, optional = true }
+oxideav-s3m = { workspace = true, optional = true }
 oxideav-mp1 = { workspace = true, optional = true }
 oxideav-mp2 = { workspace = true, optional = true }
 oxideav-mp3 = { workspace = true, optional = true }

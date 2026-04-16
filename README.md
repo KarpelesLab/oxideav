@@ -92,6 +92,7 @@ FLAC/PCM → MP4, MJPEG ↔ AVI).
 | Vorbis          | ✅ matches lewton/ffmpeg        | ✅ real audio (tier 1)   |
 | Opus            | header parsing only            | —                        |
 | MOD (ProTracker)| ✅ 4-ch Paula mixer + effects  | —                        |
+| S3M (Scream Tracker 3) | ✅ 8-bit/16-bit, basic effects (Axx/Bxx/Cxx/Dxy/Exx/Fxx/Gxx/Hxx/Oxx/Txx/Vxx) | — |
 | 8SVX (Amiga IFF)| ✅                             | —                        |
 | MP1/MP2/MP3     | header only (scaffold)         | —                        |
 | AAC-LC          | header only (scaffold)         | —                        |

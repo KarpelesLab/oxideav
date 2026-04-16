@@ -19,6 +19,7 @@ members = [
     "crates/oxideav-theora",
     "crates/oxideav-iff",
     "crates/oxideav-mod",
+    "crates/oxideav-s3m",
     "crates/oxideav-mp1",
     "crates/oxideav-mp2",
     "crates/oxideav-mp3",
@@ -61,6 +62,7 @@ oxideav-mpeg4video = { path = "crates/oxideav-mpeg4video", version = "0.0.1" }
 oxideav-theora = { path = "crates/oxideav-theora", version = "0.0.1" }
 oxideav-iff = { path = "crates/oxideav-iff", version = "0.0.1" }
 oxideav-mod = { path = "crates/oxideav-mod", version = "0.0.1" }
+oxideav-s3m = { path = "crates/oxideav-s3m", version = "0.0.1" }
 oxideav-mp1 = { path = "crates/oxideav-mp1", version = "0.0.1" }
 oxideav-mp2 = { path = "crates/oxideav-mp2", version = "0.0.1" }
 oxideav-mp3 = { path = "crates/oxideav-mp3", version = "0.0.1" }
