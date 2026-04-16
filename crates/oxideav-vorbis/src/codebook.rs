@@ -371,6 +371,38 @@ mod tests {
         assert_eq!(lookup1_values(0, 3), 0);
     }
 
+    /// Regression: verify libvorbis-compatible marker-based code construction.
+    /// Book 16 from sine.ogg has non-monotone lengths (5,5,5,5,6,5,...) which
+    /// textbook canonical-Huffman gets WRONG. These expected codes were
+    /// captured from libvorbis's `_make_words` for the same input lengths.
+    #[test]
+    fn marker_codes_match_libvorbis() {
+        // Condensed lengths from sine.ogg codebook 16 (first 20 entries).
+        let lengths = vec![5, 5, 5, 5, 6, 5, 6, 5, 6, 5, 6, 5, 6, 5, 6, 5, 6, 5, 6, 5];
+        let mut cb = Codebook {
+            dimensions: 1,
+            entries: lengths.len() as u32,
+            codeword_lengths: lengths,
+            vq: None,
+            codewords: vec![],
+        };
+        cb.build_decoder().expect("build_decoder");
+
+        // libvorbis produces codes 0, 1, 2, 3, 8, 4, 9, 5, 10, 6, 11, 7,
+        // 12, ... for this pattern: L5 entries get codes 0..N_L5-1 and L6
+        // entries get codes that descend from the unused L5 slots.
+        //
+        // Note: the canonical-Huffman WRONG answer would be entry 4 = 36
+        // (which is what broke sine.ogg decode until d8f068a).
+        assert_eq!(cb.codewords[0], 0b00000, "e0 L5");
+        assert_eq!(cb.codewords[1], 0b00001, "e1 L5");
+        assert_eq!(cb.codewords[2], 0b00010, "e2 L5");
+        assert_eq!(cb.codewords[3], 0b00011, "e3 L5");
+        // Entry 4 (L6) goes to leftmost unused L6 slot = 001000, NOT 100100.
+        assert_eq!(cb.codewords[4], 0b001000, "e4 L6 (the bug-finder)");
+        assert_eq!(cb.codewords[5], 0b00101, "e5 L5");
+    }
+
     #[test]
     fn ilog_basic() {
         // Vorbis ilog: bits needed to represent the value (top bit position).
