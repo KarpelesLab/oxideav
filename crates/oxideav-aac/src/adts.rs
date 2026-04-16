@@ -130,24 +130,25 @@ mod tests {
 
     #[test]
     fn parse_minimal_lc_mono() {
-        // syncword=0xFFF, id=0, layer=0, protection_absent=1
-        // profile=01 (LC), sf_idx=0100 (44100), priv=0, chan_cfg=001
-        // pad bits, frame_length=0x100 (256), buf_fullness=0x7FF, blocks=0
-        let mut br = [0u8; 7];
-        // 0..1 byte 0: 0xFF
-        br[0] = 0xFF;
-        // bits 12: sync done; next bits: id(0), layer(00), prot(1) = 0xF1 then profile(01)..
-        // Easiest: build manually with a writer.
-        // 0xFF F1 -> sync(12)+id(0)+layer(00)+prot(1) — but high 12 of u16 = FFF1 >> 4 = 0xFFF, then 0001 next nibble.
-        br[1] = 0xF1; // 1111 0001 — last 4 bits = 0001 = id(0)+layer(00)+prot(1)
-                      // Next byte: profile(01)+sf_idx(0100)+priv(0)+chan_cfg high bits...
-                      // bits: 01 0100 0 0 -> 0101 0000 = 0x50 — but channel_cfg has 3 bits so we span.
-                      // Let's just use a precomputed real frame from our fixture.
-        let bytes = std::fs::read("/tmp/aac_lc_mono.aac").expect("fixture missing");
+        // ADTS header laid out by hand for AAC-LC mono 44.1 kHz:
+        //   syncword=0xFFF  id=0  layer=00  protection_absent=1
+        //   profile=01 (LC)  sf_idx=0100 (44100)  priv=0  chan_cfg=001 (mono)
+        //   orig=0 home=0 cprt_id=0 cprt_start=0
+        //   frame_length=256  buf_fullness=0x7FF  nrdbf=00
+        // Byte breakdown (bits high→low):
+        //   0xFF = 11111111  (sync 8/12)
+        //   0xF1 = 11110001  (sync 4/12 + id 0 + layer 00 + prot 1)
+        //   0x50 = 01010000  (profile 01 + sf_idx 0100 + priv 0 + chan high 0)
+        //   0x40 = 01000000  (chan low 01 + orig/home/cprt_id/cprt_start 0000 + frame_len top 2 = 00)
+        //   0x20 = 00100000  (frame_len bits 2-9: bit 34 carries value 256)
+        //   0x1F = 00011111  (frame_len low 3 = 000 + buf_fullness top 5 = 11111)
+        //   0xFC = 11111100  (buf_fullness low 6 = 111111 + nrdbf 00)
+        let bytes = [0xFFu8, 0xF1, 0x50, 0x40, 0x20, 0x1F, 0xFC];
         let hdr = parse_adts_header(&bytes).expect("parse hdr");
         assert_eq!(hdr.object_type, AOT_AAC_LC);
         assert_eq!(hdr.channel_configuration, 1);
         assert_eq!(hdr.sample_rate(), Some(44_100));
+        assert_eq!(hdr.frame_length, 256);
     }
 
     #[test]
