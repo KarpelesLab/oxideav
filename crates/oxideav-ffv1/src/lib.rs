@@ -17,6 +17,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod config;
+pub mod crc;
 pub mod decoder;
 pub mod encoder;
 pub mod predictor;

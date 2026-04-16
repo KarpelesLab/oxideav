@@ -214,13 +214,13 @@ impl RangeEncoder {
         }
     }
 
+    /// Combined renormalise-and-emit-byte step — FFmpeg's `renorm_encoder`.
+    /// Exactly one byte is shifted out of `low` (either immediately committed
+    /// via `buffered`, or deferred to `outstanding` if we're in the ambiguous
+    /// 0xFF01..=0xFFFF zone), and `range <<= 8` is applied.
     fn shift_low(&mut self) {
-        // If low < 0xFF00 we can commit the buffered byte + any outstanding
-        // 0xFFs as exactly their current values. If low >= 0x1_0000 the
-        // buffered byte carries up (buffered+1, and the 0xFFs become 0x00).
-        // Otherwise (0xFF00 <= low < 0x10000) we have another ambiguous byte
-        // and must keep deferring.
-        if self.low < 0xFF00 || self.low >= 0x1_0000 {
+        let key = self.low.wrapping_sub(0xFF01);
+        if key >= 0xFF {
             let carry = if self.low >= 0x1_0000 { 1u8 } else { 0 };
             if self.buffered >= 0 {
                 self.out.push((self.buffered as u8).wrapping_add(carry));
@@ -232,16 +232,16 @@ impl RangeEncoder {
             self.outstanding = 0;
             self.buffered = ((self.low >> 8) & 0xFF) as i32;
         } else {
-            // Low is in the 0xFF00..=0xFFFF ambiguous zone — add one more
-            // outstanding byte to the tally.
             self.outstanding += 1;
         }
         self.low = (self.low & 0xFF) << 8;
+        self.range <<= 8;
     }
 
-    fn renormalize(&mut self) {
-        while self.range < 0x100 {
-            self.range <<= 8;
+    /// Renormalise only when `range` has collapsed below 0x100 — same guard
+    /// FFmpeg uses inside `put_rac`.
+    fn maybe_renormalize(&mut self) {
+        if self.range < 0x100 {
             self.shift_low();
         }
     }
@@ -257,7 +257,7 @@ impl RangeEncoder {
             self.range -= rangeoff;
             *state = self.transition.zero_state[*state as usize];
         }
-        self.renormalize();
+        self.maybe_renormalize();
     }
 
     /// Encode an integer with the sign/exponent/mantissa scheme.
@@ -287,16 +287,54 @@ impl RangeEncoder {
     }
 
     /// Flush the internal state. Must be called once at the end.
+    ///
+    /// Legacy termination path that drops trailing zero bytes — kept for
+    /// backward compatibility with internal range-coder unit tests that
+    /// expect minimal output. New code should prefer `finish_for_slice`
+    /// (FFV1 v1+ slice terminator) or `finish_for_extradata` (FFV1 config
+    /// record terminator).
     pub fn finish(mut self) -> Vec<u8> {
-        // Two rounds are sufficient to flush the ambiguous zone.
+        // Five rounds of `shift_low` flush the ambiguous zone thoroughly.
         for _ in 0..5 {
             self.shift_low();
         }
-        // Drop trailing 0x00 bytes that are only there because we padded.
         while self.out.last().copied() == Some(0) {
             self.out.pop();
         }
         self.out
+    }
+
+    /// Flush the coder exactly the way FFmpeg's `ff_rac_terminate(c, 0)`
+    /// does, for the configuration record. Matches the byte-length that a
+    /// conforming FFV1 parser expects.
+    pub fn finish_for_extradata(mut self) -> Vec<u8> {
+        self.terminate_common();
+        self.out
+    }
+
+    /// Flush the coder exactly the way FFmpeg's `ff_rac_terminate(c, 1)`
+    /// does, for a slice's range-coded data. Emits an extra
+    /// `put_rac(state=129, 0)` marker before the common termination.
+    pub fn finish_for_slice(mut self) -> Vec<u8> {
+        // The `129` marker: `put_rac(c, { 129 }, 0)`. FFmpeg's decoder
+        // reads this back via `get_rac({129})` after the last pixel.
+        let mut marker_state = 129u8;
+        self.put_rac(&mut marker_state, false);
+        self.terminate_common();
+        self.out
+    }
+
+    /// Common tail of both `ff_rac_terminate` variants. Matches FFmpeg's
+    /// `range = 0xFF; low += 0xFF; renorm_encoder(c); range = 0xFF;
+    /// renorm_encoder(c);`. `shift_low` now embeds the `range <<= 8`
+    /// step (mirroring FFmpeg's `renorm_encoder`) so we don't apply it
+    /// again here.
+    fn terminate_common(&mut self) {
+        self.range = 0xFF;
+        self.low += 0xFF;
+        self.shift_low();
+        self.range = 0xFF;
+        self.shift_low();
     }
 }
 

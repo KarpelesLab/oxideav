@@ -1,9 +1,14 @@
 //! FFV1 packet decoder.
 //!
-//! Each compressed packet holds one frame (keyframe flag: 1 bit) followed
-//! by one or more slices. Our decoder only implements our simple profile
-//! (single-slice, 8-bit YCbCr 4:2:0 or 4:4:4, coder_type=1). Foreign streams
-//! producing multiple slices will be rejected with `Error::Unsupported`.
+//! Each compressed packet holds one frame: a leading range-coded keyframe
+//! bit embedded in the first slice's range coder, followed by one or more
+//! slices. Each slice ends with a trailer (`slice_size` + optional
+//! `error_status` + `slice_crc_parity`) per RFC 9043 §4.5; the trailer
+//! format is selected by the `ec` flag in the configuration record.
+//!
+//! Our decoder supports arbitrary `num_h_slices × num_v_slices` grids as
+//! long as each slice lands on a single cell; it still restricts the rest
+//! of the feature space to 8-bit YCbCr 4:2:0 / 4:4:4 with `coder_type = 1`.
 
 use oxideav_codec::Decoder;
 use oxideav_core::frame::VideoPlane;
@@ -12,8 +17,7 @@ use oxideav_core::{
 };
 
 use crate::config::ConfigRecord;
-use crate::range_coder::RangeDecoder;
-use crate::slice::{decode_slice, PlaneGeom};
+use crate::slice::decode_frame;
 
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     let config = if params.extradata.is_empty() {
@@ -87,23 +91,10 @@ fn decode_packet(
     width: u32,
     height: u32,
 ) -> Result<VideoFrame> {
-    if config.num_h_slices != 1 || config.num_v_slices != 1 {
-        return Err(Error::unsupported("FFV1: multi-slice decode"));
-    }
     let data = &pkt.data;
     if data.is_empty() {
         return Err(Error::invalid("FFV1 decode: empty packet"));
     }
-
-    // A top-level range-coded "picture header" covers the keyframe bit. Its
-    // state is a single byte. We then switch to decoding the slice data
-    // directly; since our single-slice simple profile puts the slice
-    // immediately after the keyframe bit (using range-coded state), we
-    // reuse the remaining buffer as the slice bytes. This mirrors how
-    // FFmpeg reads a v3 keyframe packet.
-    let mut kf_dec = RangeDecoder::new(data);
-    let mut kf_state = 128u8;
-    let _keyframe = kf_dec.get_rac(&mut kf_state);
 
     // Map the pixel format from the config record.
     let pix_fmt = if config.is_yuv420() {
@@ -114,35 +105,34 @@ fn decode_packet(
         return Err(Error::unsupported("FFV1: unsupported chroma subsampling"));
     };
 
-    let (cw, ch) = match pix_fmt {
-        PixelFormat::Yuv420P => (width.div_ceil(2), height.div_ceil(2)),
-        PixelFormat::Yuv444P => (width, height),
-        _ => unreachable!(),
-    };
+    let has_chroma = config.chroma_planes;
+    let log2_h_sub = config.log2_h_chroma_subsample;
+    let log2_v_sub = config.log2_v_chroma_subsample;
+    let ec = config.ec != 0;
 
-    // After the keyframe bit was decoded, the remainder of the bytestream
-    // is the slice payload (since we emit a single slice). Our single-slice
-    // encoder records the slice size in the last 3 bytes — decode_slice
-    // strips them.
-    let slice_start = kf_dec.position();
-    let slice_bytes = &data[slice_start..];
-    let y_geom = PlaneGeom { width, height };
-    let c_geom = PlaneGeom {
-        width: cw,
-        height: ch,
-    };
-    let decoded = decode_slice(slice_bytes, y_geom, Some(c_geom))?;
+    let decoded = decode_frame(
+        data,
+        width,
+        height,
+        config.num_h_slices,
+        config.num_v_slices,
+        has_chroma,
+        log2_h_sub,
+        log2_v_sub,
+        ec,
+    )?;
 
     let y_plane = VideoPlane {
         stride: width as usize,
         data: decoded.y,
     };
+    let cw = decoded.c_geom.width as usize;
     let u_plane = VideoPlane {
-        stride: cw as usize,
+        stride: cw,
         data: decoded.u.unwrap_or_default(),
     };
     let v_plane = VideoPlane {
-        stride: cw as usize,
+        stride: cw,
         data: decoded.v.unwrap_or_default(),
     };
 

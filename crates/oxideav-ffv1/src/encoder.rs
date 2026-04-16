@@ -14,8 +14,7 @@ use oxideav_core::{
 };
 
 use crate::config::ConfigRecord;
-use crate::range_coder::RangeEncoder;
-use crate::slice::{encode_slice, PlaneGeom, SlicePlanes};
+use crate::slice::{encode_single_slice_frame, PlaneGeom, SlicePlanes};
 
 pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
     let width = params
@@ -147,15 +146,11 @@ fn encode_frame(v: &VideoFrame) -> Result<Vec<u8>> {
         },
     };
 
-    // The packet format is: 1 range-coded keyframe bit + slice payload.
-    let mut kf_enc = RangeEncoder::new();
-    let mut kf_state = 128u8;
-    kf_enc.put_rac(&mut kf_state, true); // always a keyframe
-    let mut out = kf_enc.finish();
-
-    let slice_bytes = encode_slice(&planes);
-    out.extend_from_slice(&slice_bytes);
-    Ok(out)
+    // RFC 9043 single-slice v3 packet: keyframe bit, slice header, planes,
+    // 3-byte slice_size footer. We keep `ec = false` in the config record,
+    // which means no CRC/error_status byte is appended per slice — FFmpeg
+    // handles either form depending on the ec flag it reads from extradata.
+    Ok(encode_single_slice_frame(&planes, false))
 }
 
 fn flatten_plane(data: &[u8], stride: usize, width: u32, height: u32) -> Vec<u8> {

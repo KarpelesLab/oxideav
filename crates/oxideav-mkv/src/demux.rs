@@ -12,7 +12,7 @@ use oxideav_core::{
     CodecParameters, Error, MediaType, Packet, Result, SampleFormat, StreamInfo, TimeBase,
 };
 
-use crate::codec_id::from_matroska;
+use crate::codec_id::{from_matroska, strip_bitmapinfoheader};
 use crate::ebml::{
     read_bytes, read_element_header, read_float, read_string, read_uint, skip, VINT_UNKNOWN_SIZE,
 };
@@ -131,7 +131,7 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     for t in &tracks {
         let idx = streams.len() as u32;
         track_index_by_number.insert(t.number, idx);
-        let codec_id = from_matroska(&t.codec_id_string);
+        let codec_id = from_matroska(&t.codec_id_string, &t.codec_private);
         let mut params = match t.track_type {
             ids::TRACK_TYPE_VIDEO => CodecParameters::video(codec_id.clone()),
             ids::TRACK_TYPE_AUDIO => CodecParameters::audio(codec_id.clone()),
@@ -141,12 +141,16 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
                 p
             }
         };
-        // Codec-specific CodecPrivate normalisation. Matroska's "A_FLAC"
-        // CodecPrivate sometimes includes the leading "fLaC" magic; our
-        // FLAC stack expects extradata to be metadata blocks only.
+        // Codec-specific CodecPrivate normalisation:
+        //   * `V_MS/VFW/FOURCC`: the outer 40-byte BITMAPINFOHEADER wraps
+        //     real codec extradata — strip it so decoders see their own
+        //     config record.
+        //   * `A_FLAC`: the CodecPrivate sometimes has a leading `"fLaC"`
+        //     magic; our FLAC decoder expects metadata blocks only.
+        let stripped = strip_bitmapinfoheader(&t.codec_id_string, &t.codec_private);
         params.extradata = match codec_id.as_str() {
-            "flac" if t.codec_private.starts_with(b"fLaC") => t.codec_private[4..].to_vec(),
-            _ => t.codec_private.clone(),
+            "flac" if stripped.starts_with(b"fLaC") => stripped[4..].to_vec(),
+            _ => stripped,
         };
         if t.track_type == ids::TRACK_TYPE_AUDIO {
             params.sample_rate = Some(t.sample_rate.round() as u32);

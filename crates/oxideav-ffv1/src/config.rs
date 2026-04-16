@@ -11,6 +11,7 @@
 
 use oxideav_core::{Error, Result};
 
+use crate::crc::crc32_ieee;
 use crate::range_coder::{RangeDecoder, RangeEncoder};
 
 /// Parsed FFV1 configuration record — a superset of what this codec supports,
@@ -57,6 +58,10 @@ impl ConfigRecord {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut enc = RangeEncoder::new();
+        // FFmpeg shares a single 32-byte state buffer across all symbol and
+        // rac calls in the extradata — `put_rac(state, ...)` uses state[0]
+        // (the same byte as `put_symbol`'s zero-bit marker). That subtle
+        // detail matters for bit-for-bit compatibility.
         let mut state = [128u8; 32];
         enc.put_symbol_u(&mut state, self.version);
         if self.version >= 3 {
@@ -68,27 +73,33 @@ impl ConfigRecord {
         if self.version >= 1 {
             enc.put_symbol_u(&mut state, self.bits_per_raw_sample);
         }
-        let mut br = 128u8;
-        enc.put_rac(&mut br, self.chroma_planes);
+        enc.put_rac(&mut state[0], self.chroma_planes);
         enc.put_symbol_u(&mut state, self.log2_h_chroma_subsample);
         enc.put_symbol_u(&mut state, self.log2_v_chroma_subsample);
-        enc.put_rac(&mut br, self.extra_plane);
+        enc.put_rac(&mut state[0], self.extra_plane);
         enc.put_symbol_u(&mut state, self.num_h_slices.saturating_sub(1));
         enc.put_symbol_u(&mut state, self.num_v_slices.saturating_sub(1));
         enc.put_symbol_u(&mut state, self.quant_table_set_count);
-        // Emit the default FFV1 quantisation-table set. Exactly one set at
-        // this point (quant_table_set_count == 1) as enforced by our decoder.
-        emit_default_quant_table_set(&mut enc);
-        // states_coded = false for each set (no initial_state_delta).
-        enc.put_rac(&mut br, false);
-        enc.put_symbol_u(&mut state, self.ec);
-        enc.put_symbol_u(&mut state, self.intra);
+        // Emit the configured number of quantisation-table sets. Each set
+        // has 5 sub-tables; we always emit FFmpeg's default sub-tables.
+        for _ in 0..self.quant_table_set_count {
+            emit_default_quant_table_set(&mut enc);
+        }
+        // initial_state_delta == false for each set (no custom states).
+        for _ in 0..self.quant_table_set_count {
+            enc.put_rac(&mut state[0], false);
+        }
+        if self.version >= 3 {
+            enc.put_symbol_u(&mut state, self.ec);
+            enc.put_symbol_u(&mut state, self.intra);
+        }
 
-        let mut bytes = enc.finish();
-        // Append 4 bytes CRC parity. For simplicity, emit zero; strictly the
-        // parity should make CRC(full) == 0 (IEEE poly 0x104C11DB7). Producers
-        // that validate can reject this; our decoder tolerates any value.
-        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        let mut bytes = enc.finish_for_extradata();
+        // Append the CRC-32 (IEEE polynomial 0x04C11DB7) of the preceding
+        // bytes in big-endian order. Chosen so that the CRC of the whole
+        // record (including these 4 bytes) is zero — FFmpeg validates this.
+        let crc = crc32_ieee(&bytes);
+        bytes.extend_from_slice(&crc.to_be_bytes());
         bytes
     }
 
@@ -96,7 +107,12 @@ impl ConfigRecord {
         if data.len() < 5 {
             return Err(Error::invalid("FFV1 config record too short"));
         }
-        // Strip the trailing 32-bit CRC (not verified here).
+        // Verify the trailing 32-bit CRC-32 parity: CRC of the whole record
+        // (body + stored CRC bytes) must be zero. Reject on mismatch, which
+        // is what FFmpeg does for a v3 extradata.
+        if crc32_ieee(data) != 0 {
+            return Err(Error::invalid("FFV1 config record CRC mismatch"));
+        }
         let body = &data[..data.len() - 4];
         let mut dec = RangeDecoder::new(body);
         let mut state = [128u8; 32];
@@ -106,9 +122,10 @@ impl ConfigRecord {
             return Err(Error::unsupported(format!("FFV1 version {version}")));
         }
         let micro_version = dec.get_symbol_u(&mut state);
+        // `ac` / `coder_type`: 0 = Golomb-Rice, 1 = range-coder default-tab,
+        // 2 = range-coder custom-tab.
         let coder_type = dec.get_symbol_u(&mut state);
         if coder_type == 2 {
-            // Custom state transition deltas present — unsupported.
             return Err(Error::unsupported(
                 "FFV1 custom state transition tables not supported",
             ));
@@ -123,16 +140,17 @@ impl ConfigRecord {
             return Err(Error::unsupported("FFV1 RGB colorspace"));
         }
         let bits_per_raw_sample = dec.get_symbol_u(&mut state);
-        if bits_per_raw_sample != 8 {
+        if bits_per_raw_sample == 0 {
+            // FFmpeg quirk: version-3 extradata encodes 8-bit as 0.
+        } else if bits_per_raw_sample != 8 {
             return Err(Error::unsupported(format!(
                 "FFV1 {bits_per_raw_sample}-bit samples"
             )));
         }
-        let mut br = 128u8;
-        let chroma_planes = dec.get_rac(&mut br);
+        let chroma_planes = dec.get_rac(&mut state[0]);
         let log2_h_chroma_subsample = dec.get_symbol_u(&mut state);
         let log2_v_chroma_subsample = dec.get_symbol_u(&mut state);
-        let extra_plane = dec.get_rac(&mut br);
+        let extra_plane = dec.get_rac(&mut state[0]);
         if extra_plane {
             return Err(Error::unsupported("FFV1 alpha plane"));
         }
@@ -142,17 +160,25 @@ impl ConfigRecord {
         if quant_table_set_count == 0 || quant_table_set_count > 8 {
             return Err(Error::invalid("FFV1 bad quant_table_set_count"));
         }
-        // Read (and discard) the quant-table sets; we use fixed FFmpeg
-        // defaults internally.
+        // Skip the quant-table sets; we use fixed FFmpeg defaults internally
+        // and do not materialise alternate tables.
         for _ in 0..quant_table_set_count {
             skip_quant_table_set(&mut dec)?;
-            let states_coded = dec.get_rac(&mut br);
+        }
+        // One `states_coded` bit per quant_table_set.
+        for _ in 0..quant_table_set_count {
+            let states_coded = dec.get_rac(&mut state[0]);
             if states_coded {
                 return Err(Error::unsupported("FFV1 initial_state_delta"));
             }
         }
         let ec = dec.get_symbol_u(&mut state);
         let intra = dec.get_symbol_u(&mut state);
+        let bits_per_raw_sample = if bits_per_raw_sample == 0 {
+            8
+        } else {
+            bits_per_raw_sample
+        };
 
         Ok(Self {
             version,

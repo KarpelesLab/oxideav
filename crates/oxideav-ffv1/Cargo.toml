@@ -11,3 +11,7 @@ description = "Pure-Rust FFV1 (RFC 9043) lossless intra-only video codec for oxi
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }
+
+[dev-dependencies]
+oxideav-container = { workspace = true }
+oxideav-mkv = { workspace = true }
