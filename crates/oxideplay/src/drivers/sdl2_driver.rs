@@ -1,118 +1,104 @@
-//! SDL2-backed audio + video output driver.
+//! SDL2-backed audio + video output driver, talking to a runtime-loaded
+//! libSDL2 (`crate::drivers::sdl2_loader`) instead of linking against
+//! `sdl2-sys` at build time.
 //!
-//! Audio is the master clock: the SDL2 audio callback advances a sample
-//! counter under a mutex, and `master_clock_pos` returns the total
-//! samples consumed divided by the output rate.
+//! Audio uses the SDL queue API (`SDL_QueueAudio` / `SDL_GetQueuedAudioSize`)
+//! rather than callbacks, which means we don't have to thread a Rust
+//! callback through the FFI boundary. The "master clock" is derived
+//! from `(total_queued_bytes - currently_queued_bytes) / bytes_per_second`.
 //!
-//! Video (when enabled) uses a YUV texture; incoming `VideoFrame`s are
-//! converted on the fly to `Yuv420P` if needed and uploaded with
-//! `update_yuv`.
+//! Video (when enabled) uses a YUV streaming texture; incoming
+//! `VideoFrame`s are converted on the fly to `Yuv420P` if needed and
+//! uploaded with `SDL_UpdateYUVTexture`.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::ffi::{c_int, c_void, CString};
+use std::ptr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use oxideav_core::{AudioFrame, Error, PixelFormat, Result, SampleFormat, VideoFrame};
-use sdl2::audio::{AudioCallback, AudioDevice, AudioSpecDesired};
-use sdl2::event::Event;
-use sdl2::keyboard::{Keycode, Mod};
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::render::{Canvas, Texture, TextureCreator};
-use sdl2::video::{Window, WindowContext};
-use sdl2::{AudioSubsystem, EventPump, Sdl, VideoSubsystem};
 
 use crate::driver::{OutputDriver, PlayerEvent, SeekDir};
+use crate::drivers::sdl2_loader::{
+    self as ldr, SDL_AudioDeviceID, SDL_AudioSpec, SDL_Event, Sdl2Lib,
+};
 
-/// Shared state the audio callback reads from and the decode loop writes to.
-struct AudioShared {
-    /// Interleaved f32 samples pending playback.
-    ring: Mutex<VecDeque<f32>>,
-    /// Total samples consumed by the device since start (per channel).
-    samples_played: AtomicU64,
-    /// Audio output sample rate.
-    sample_rate: u32,
-    /// Channel count of the output device.
-    channels: u16,
-    /// 0.0..=1.0 volume.
-    volume: Mutex<f32>,
-    /// When true, callback emits silence (still advances the clock so the
-    /// pause UI feels "correct" — but we override: see comments below).
-    paused: AtomicBool,
+/// RAII guard around `SDL_Init` / `SDL_Quit`.
+struct SdlGuard {
+    lib: Arc<Sdl2Lib>,
 }
 
-struct SinkCallback {
-    shared: Arc<AudioShared>,
-}
-
-impl AudioCallback for SinkCallback {
-    type Channel = f32;
-
-    fn callback(&mut self, out: &mut [f32]) {
-        let paused = self.shared.paused.load(Ordering::Acquire);
-        if paused {
-            for s in out.iter_mut() {
-                *s = 0.0;
-            }
-            return;
-        }
-        let vol = *self.shared.volume.lock().unwrap();
-        let mut ring = self.shared.ring.lock().unwrap();
-        let mut produced: usize = 0;
-        for dst in out.iter_mut() {
-            match ring.pop_front() {
-                Some(v) => {
-                    *dst = v * vol;
-                    produced += 1;
-                }
-                None => *dst = 0.0,
-            }
-        }
-        // samples_played is in *frames per channel*; each iteration above
-        // consumed one interleaved f32 (= one sample from one channel).
-        let ch = self.shared.channels.max(1) as u64;
-        self.shared
-            .samples_played
-            .fetch_add((produced as u64) / ch, Ordering::Release);
+impl Drop for SdlGuard {
+    fn drop(&mut self) {
+        // SAFETY: matches the SDL_Init done in `Sdl2Driver::new`.
+        unsafe { (self.lib.SDL_Quit)() };
     }
 }
 
 /// Video sub-state that only exists when a window is open.
-///
-/// The `'static` lifetime on `Texture<'static>` is safe because we pair
-/// it with the `TextureCreator` in the same struct; they're dropped
-/// together when the `VideoState` is dropped. We use a raw pointer-like
-/// trick: the texture creator is held via `Arc` in rust-sdl2 internally,
-/// but `TextureCreator<WindowContext>` does *not* hand out a Clone, so
-/// we own the creator and use unsafe to lie about the lifetime.
 struct VideoState {
-    canvas: Canvas<Window>,
-    tex_creator: TextureCreator<WindowContext>,
+    lib: Arc<Sdl2Lib>,
+    window: *mut c_void,
+    renderer: *mut c_void,
+    /// Currently bound texture (if any) plus its dimensions.
     texture: Option<TextureBundle>,
 }
 
-/// A YUV texture paired with the dimensions it was built for.
-///
-/// SAFETY: `texture`'s real lifetime is tied to `tex_creator` inside
-/// `VideoState`. We extend it to `'static` via transmute on creation
-/// because we always drop the texture before the creator. See
-/// `(re)create texture` in `present_video` for the tight coupling.
+impl Drop for VideoState {
+    fn drop(&mut self) {
+        // Texture goes first, then renderer, then window — same order
+        // rust-sdl2 enforces internally and what SDL2 itself documents.
+        if let Some(tb) = self.texture.take() {
+            // SAFETY: pointer was returned by SDL_CreateTexture; SDL is
+            // still loaded because `lib` is held by Arc.
+            unsafe { (self.lib.SDL_DestroyTexture)(tb.texture) };
+        }
+        if !self.renderer.is_null() {
+            unsafe { (self.lib.SDL_DestroyRenderer)(self.renderer) };
+        }
+        if !self.window.is_null() {
+            unsafe { (self.lib.SDL_DestroyWindow)(self.window) };
+        }
+    }
+}
+
 struct TextureBundle {
-    texture: Texture<'static>,
+    texture: *mut c_void,
     width: u32,
     height: u32,
 }
 
+/// Audio device + bookkeeping for the queue-based clock.
+struct AudioState {
+    lib: Arc<Sdl2Lib>,
+    dev: SDL_AudioDeviceID,
+    /// Output sample rate.
+    sample_rate: u32,
+    /// Total bytes ever pushed to SDL via SDL_QueueAudio. Used to
+    /// derive samples_played = (total_queued - still_queued) / bps.
+    total_queued_bytes: u64,
+    /// Bytes per output sample frame (channels * sizeof(f32) = ch * 4).
+    bytes_per_frame: u32,
+    /// Current playback volume (0.0..=1.0).
+    volume: f32,
+    /// True if SDL_PauseAudioDevice was called with pause_on=1.
+    paused: bool,
+}
+
+impl Drop for AudioState {
+    fn drop(&mut self) {
+        if self.dev != 0 {
+            // SAFETY: dev was returned from SDL_OpenAudioDevice.
+            unsafe { (self.lib.SDL_CloseAudioDevice)(self.dev) };
+        }
+    }
+}
+
 pub struct Sdl2Driver {
-    #[allow(dead_code)]
-    sdl: Sdl,
-    #[allow(dead_code)]
-    audio_sub: AudioSubsystem,
-    #[allow(dead_code)]
-    video_sub: Option<VideoSubsystem>,
-    event_pump: EventPump,
-    audio_dev: AudioDevice<SinkCallback>,
-    shared: Arc<AudioShared>,
+    lib: Arc<Sdl2Lib>,
+    /// Holds the SDL_Init, dropped *last* (after audio + video state).
+    _guard: SdlGuard,
+    audio: AudioState,
     video: Option<VideoState>,
     output_sample_rate: u32,
     output_channels: u16,
@@ -126,79 +112,139 @@ impl Sdl2Driver {
         audio_channels: u16,
         video: Option<(u32, u32)>,
     ) -> Result<Self> {
-        let sdl = sdl2::init().map_err(Error::other)?;
-        let audio_sub = sdl.audio().map_err(Error::other)?;
+        let lib = Arc::new(Sdl2Lib::try_load().map_err(|e| {
+            Error::other(format!(
+                "SDL2 library not found at runtime — install libSDL2 to enable audio/video output ({e})"
+            ))
+        })?);
+
+        let init_flags = ldr::SDL_INIT_AUDIO
+            | ldr::SDL_INIT_EVENTS
+            | if video.is_some() {
+                ldr::SDL_INIT_VIDEO
+            } else {
+                0
+            };
+
+        // SAFETY: SDL_Init is the canonical initialisation entry point
+        // and is safe to call from the main thread.
+        let rc = unsafe { (lib.SDL_Init)(init_flags) };
+        if rc != 0 {
+            return Err(Error::other(format!(
+                "SDL_Init failed: {}",
+                lib.last_error()
+            )));
+        }
+        let guard = SdlGuard { lib: lib.clone() };
 
         let channels = audio_channels.clamp(1, 2);
-        let shared = Arc::new(AudioShared {
-            ring: Mutex::new(VecDeque::with_capacity(
-                (audio_sample_rate as usize) * channels as usize,
-            )),
-            samples_played: AtomicU64::new(0),
-            sample_rate: audio_sample_rate,
-            channels,
-            volume: Mutex::new(1.0),
-            paused: AtomicBool::new(false),
-        });
-
-        let desired = AudioSpecDesired {
-            freq: Some(audio_sample_rate as i32),
-            channels: Some(channels as u8),
-            samples: Some(1024),
+        let bytes_per_frame = (channels as u32) * 4; // f32 samples
+        let desired = SDL_AudioSpec {
+            freq: audio_sample_rate as c_int,
+            format: ldr::AUDIO_F32,
+            channels: channels as u8,
+            silence: 0,
+            samples: 1024,
+            padding: 0,
+            size: 0,
+            // None = use the queue API (SDL_QueueAudio).
+            callback: None,
+            userdata: ptr::null_mut(),
         };
-        let shared_cb = shared.clone();
-        let audio_dev = audio_sub
-            .open_playback(None, &desired, move |_spec| SinkCallback {
-                shared: shared_cb,
-            })
-            .map_err(Error::other)?;
-        audio_dev.resume();
+        let mut obtained: SDL_AudioSpec = SDL_AudioSpec {
+            freq: 0,
+            format: 0,
+            channels: 0,
+            silence: 0,
+            samples: 0,
+            padding: 0,
+            size: 0,
+            callback: None,
+            userdata: ptr::null_mut(),
+        };
 
-        let (video_sub, video, event_pump) = match video {
-            Some((w, h)) => {
-                let vs = sdl.video().map_err(Error::other)?;
-                let window = vs
-                    .window("oxideplay", w.max(1), h.max(1))
-                    .position_centered()
-                    .resizable()
-                    .build()
-                    .map_err(|e| Error::other(e.to_string()))?;
-                let canvas = window
-                    .into_canvas()
-                    .build()
-                    .map_err(|e| Error::other(e.to_string()))?;
-                let tex_creator = canvas.texture_creator();
-                let ep = sdl.event_pump().map_err(Error::other)?;
-                (
-                    Some(vs),
-                    Some(VideoState {
-                        canvas,
-                        tex_creator,
-                        texture: None,
-                    }),
-                    ep,
-                )
-            }
-            None => {
-                // Even audio-only mode needs an event pump for the SDL2
-                // audio subsystem to pump its queue on some platforms.
-                let ep = sdl.event_pump().map_err(Error::other)?;
-                (None, None, ep)
-            }
+        // SAFETY: `desired` and `&mut obtained` outlive the call. NULL
+        // device name = default playback device. allowed_changes=0 forces
+        // SDL to convert internally if the device differs.
+        let dev = unsafe {
+            (lib.SDL_OpenAudioDevice)(
+                ptr::null(),
+                0,
+                &desired as *const _,
+                &mut obtained as *mut _,
+                0,
+            )
+        };
+        if dev == 0 {
+            return Err(Error::other(format!(
+                "SDL_OpenAudioDevice failed: {}",
+                lib.last_error()
+            )));
+        }
+        // Resume = unpause (pause_on=0).
+        unsafe { (lib.SDL_PauseAudioDevice)(dev, 0) };
+
+        let audio = AudioState {
+            lib: lib.clone(),
+            dev,
+            sample_rate: audio_sample_rate,
+            total_queued_bytes: 0,
+            bytes_per_frame,
+            volume: 1.0,
+            paused: false,
+        };
+
+        let video = match video {
+            Some((w, h)) => Some(open_video(&lib, w.max(1), h.max(1))?),
+            None => None,
         };
 
         Ok(Self {
-            sdl,
-            audio_sub,
-            video_sub,
-            event_pump,
-            audio_dev,
-            shared,
+            lib,
+            _guard: guard,
+            audio,
             video,
             output_sample_rate: audio_sample_rate,
             output_channels: channels,
         })
     }
+}
+
+fn open_video(lib: &Arc<Sdl2Lib>, w: u32, h: u32) -> Result<VideoState> {
+    let title = CString::new("oxideplay").unwrap();
+    // SAFETY: title is NUL-terminated and lives for the call. SDL2 copies it.
+    let window = unsafe {
+        (lib.SDL_CreateWindow)(
+            title.as_ptr(),
+            ldr::SDL_WINDOWPOS_CENTERED,
+            ldr::SDL_WINDOWPOS_CENTERED,
+            w as c_int,
+            h as c_int,
+            ldr::SDL_WINDOW_RESIZABLE,
+        )
+    };
+    if window.is_null() {
+        return Err(Error::other(format!(
+            "SDL_CreateWindow failed: {}",
+            lib.last_error()
+        )));
+    }
+    // -1 = "first driver supporting the requested flags"; 0 = no extra flags
+    // (lets SDL pick hardware acceleration when available).
+    // SAFETY: window was just created; SDL is initialised.
+    let renderer = unsafe { (lib.SDL_CreateRenderer)(window, -1, 0) };
+    if renderer.is_null() {
+        let err = lib.last_error();
+        unsafe { (lib.SDL_DestroyWindow)(window) };
+        return Err(Error::other(format!("SDL_CreateRenderer failed: {err}")));
+    }
+
+    Ok(VideoState {
+        lib: lib.clone(),
+        window,
+        renderer,
+        texture: None,
+    })
 }
 
 fn to_f32_interleaved(frame: &AudioFrame, out_channels: u16) -> Vec<f32> {
@@ -334,14 +380,14 @@ fn to_f32_interleaved(frame: &AudioFrame, out_channels: u16) -> Vec<f32> {
     out
 }
 
-/// Map one of our PixelFormat variants to an SDL_PIXELFORMAT enum.
-fn sdl_pixel_format(fmt: PixelFormat) -> PixelFormatEnum {
+/// Map one of our PixelFormat variants to an SDL2 pixel-format int.
+fn sdl_pixel_format(fmt: PixelFormat) -> u32 {
     match fmt {
-        PixelFormat::Yuv420P => PixelFormatEnum::IYUV,
-        PixelFormat::Yuv422P | PixelFormat::Yuv444P => PixelFormatEnum::IYUV, // converted
-        PixelFormat::Rgb24 => PixelFormatEnum::RGB24,
-        PixelFormat::Rgba => PixelFormatEnum::RGBA32,
-        PixelFormat::Gray8 => PixelFormatEnum::IYUV,
+        PixelFormat::Yuv420P => ldr::SDL_PIXELFORMAT_IYUV,
+        PixelFormat::Yuv422P | PixelFormat::Yuv444P => ldr::SDL_PIXELFORMAT_IYUV, // converted
+        PixelFormat::Rgb24 => ldr::SDL_PIXELFORMAT_RGB24,
+        PixelFormat::Rgba => ldr::SDL_PIXELFORMAT_RGBA32,
+        PixelFormat::Gray8 => ldr::SDL_PIXELFORMAT_IYUV,
     }
 }
 
@@ -451,38 +497,63 @@ impl OutputDriver for Sdl2Driver {
             None => true,
         };
         if need_new {
-            let tex = v
-                .tex_creator
-                .create_texture_streaming(sdl_pixel_format(frame.format), w, h)
-                .map_err(|e| Error::other(e.to_string()))?;
-            // SAFETY: The texture borrows from `v.tex_creator`. We store
-            // both together in `VideoState` and only drop the texture when
-            // the struct is torn down (or when replacing on resize). The
-            // lifetime is effectively the same as `v`, but we can't name
-            // that in a struct field, so we extend to `'static` and
-            // guarantee via the struct layout that the creator outlives
-            // the texture.
-            let tex_static: Texture<'static> = unsafe { std::mem::transmute(tex) };
+            // Drop the old one first so SDL can release its GPU side.
+            if let Some(old) = v.texture.take() {
+                unsafe { (self.lib.SDL_DestroyTexture)(old.texture) };
+            }
+            // SAFETY: renderer is non-null and from this lib.
+            let tex = unsafe {
+                (self.lib.SDL_CreateTexture)(
+                    v.renderer,
+                    sdl_pixel_format(frame.format),
+                    ldr::SDL_TEXTUREACCESS_STREAMING,
+                    w as c_int,
+                    h as c_int,
+                )
+            };
+            if tex.is_null() {
+                return Err(Error::other(format!(
+                    "SDL_CreateTexture failed: {}",
+                    self.lib.last_error()
+                )));
+            }
             v.texture = Some(TextureBundle {
-                texture: tex_static,
+                texture: tex,
                 width: w,
                 height: h,
             });
         }
 
-        let (y, u, vplane) = to_yuv420p(frame);
-        let yp = w as usize;
-        let up = (w / 2) as usize;
-        let vp = (w / 2) as usize;
-        if let Some(tb) = v.texture.as_mut() {
-            tb.texture
-                .update_yuv(None, &y, yp, &u, up, &vplane, vp)
-                .map_err(|e| Error::other(e.to_string()))?;
-            v.canvas.clear();
-            v.canvas
-                .copy(&tb.texture, None, None)
-                .map_err(Error::other)?;
-            v.canvas.present();
+        let (yp_buf, up_buf, vp_buf) = to_yuv420p(frame);
+        let yp = w as c_int;
+        let up = (w / 2) as c_int;
+        let vp = (w / 2) as c_int;
+        if let Some(tb) = v.texture.as_ref() {
+            // SAFETY: rect=NULL means update the whole texture; pitches
+            // match the buffer widths we just produced.
+            let rc = unsafe {
+                (self.lib.SDL_UpdateYUVTexture)(
+                    tb.texture,
+                    ptr::null(),
+                    yp_buf.as_ptr(),
+                    yp,
+                    up_buf.as_ptr(),
+                    up,
+                    vp_buf.as_ptr(),
+                    vp,
+                )
+            };
+            if rc != 0 {
+                return Err(Error::other(format!(
+                    "SDL_UpdateYUVTexture failed: {}",
+                    self.lib.last_error()
+                )));
+            }
+            unsafe { (self.lib.SDL_RenderClear)(v.renderer) };
+            unsafe {
+                (self.lib.SDL_RenderCopy)(v.renderer, tb.texture, ptr::null(), ptr::null());
+            }
+            unsafe { (self.lib.SDL_RenderPresent)(v.renderer) };
         }
         Ok(())
     }
@@ -494,7 +565,7 @@ impl OutputDriver for Sdl2Driver {
         let buf = to_f32_interleaved(frame, self.output_channels);
         // Simple sample-rate adaptation: if rates differ, linearly
         // resample per-channel. Avoids a full resampler dep for v1.
-        let final_buf = if frame.sample_rate == self.output_sample_rate {
+        let mut final_buf = if frame.sample_rate == self.output_sample_rate {
             buf
         } else {
             resample_linear(
@@ -504,23 +575,52 @@ impl OutputDriver for Sdl2Driver {
                 self.output_channels as usize,
             )
         };
-        let mut ring = self.shared.ring.lock().unwrap();
-        ring.extend(final_buf);
+        // Apply volume gain in-place before handing the buffer to SDL —
+        // we no longer have a callback, so this is the only place it can
+        // happen.
+        let vol = self.audio.volume;
+        if (vol - 1.0).abs() > f32::EPSILON {
+            for s in final_buf.iter_mut() {
+                *s *= vol;
+            }
+        }
+
+        let byte_len = (final_buf.len() * std::mem::size_of::<f32>()) as u32;
+        // SAFETY: data points into `final_buf`, valid for the call. SDL
+        // copies the bytes synchronously into its internal queue.
+        let rc = unsafe {
+            (self.lib.SDL_QueueAudio)(
+                self.audio.dev,
+                final_buf.as_ptr() as *const c_void,
+                byte_len,
+            )
+        };
+        if rc != 0 {
+            return Err(Error::other(format!(
+                "SDL_QueueAudio failed: {}",
+                self.lib.last_error()
+            )));
+        }
+        self.audio.total_queued_bytes += byte_len as u64;
         Ok(())
     }
 
     fn poll_events(&mut self) -> Vec<PlayerEvent> {
         let mut out = Vec::new();
-        for event in self.event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => out.push(PlayerEvent::Quit),
-                Event::KeyDown {
-                    keycode: Some(kc),
-                    keymod,
-                    ..
-                } => {
-                    if let Some(ev) = map_sdl_key(kc, keymod) {
-                        out.push(ev);
+        loop {
+            let mut ev = SDL_Event::zeroed();
+            // SAFETY: ev is valid; SDL writes into the passed-in struct.
+            let got = unsafe { (self.lib.SDL_PollEvent)(&mut ev as *mut _) };
+            if got == 0 {
+                break;
+            }
+            match ev.r#type {
+                ldr::SDL_QUIT => out.push(PlayerEvent::Quit),
+                ldr::SDL_KEYDOWN => {
+                    // SAFETY: type-discriminant matches the union variant.
+                    let key = unsafe { ev.as_key() };
+                    if let Some(pe) = map_sdl_key(key.keysym.sym, key.keysym.r#mod) {
+                        out.push(pe);
                     }
                 }
                 _ => {}
@@ -530,39 +630,47 @@ impl OutputDriver for Sdl2Driver {
     }
 
     fn master_clock_pos(&self) -> Duration {
-        let played = self.shared.samples_played.load(Ordering::Acquire);
-        let sr = self.shared.sample_rate.max(1) as u64;
-        let secs = played / sr;
-        let frac = played % sr;
+        // Played frames = (total_queued_bytes - currently_queued_bytes) / bytes_per_frame.
+        // SAFETY: dev is valid for as long as `audio` is alive.
+        let queued = unsafe { (self.lib.SDL_GetQueuedAudioSize)(self.audio.dev) } as u64;
+        let bpf = self.audio.bytes_per_frame.max(1) as u64;
+        let played_frames = self.audio.total_queued_bytes.saturating_sub(queued) / bpf;
+        let sr = self.audio.sample_rate.max(1) as u64;
+        let secs = played_frames / sr;
+        let frac = played_frames % sr;
         let nanos = (frac * 1_000_000_000) / sr;
         Duration::new(secs, nanos as u32)
     }
 
     fn set_paused(&mut self, paused: bool) {
-        self.shared.paused.store(paused, Ordering::Release);
-        if paused {
-            self.audio_dev.pause();
-        } else {
-            self.audio_dev.resume();
+        if self.audio.paused == paused {
+            return;
+        }
+        self.audio.paused = paused;
+        // SAFETY: dev is valid.
+        unsafe {
+            (self.lib.SDL_PauseAudioDevice)(self.audio.dev, if paused { 1 } else { 0 });
         }
     }
 
     fn set_volume(&mut self, vol: f32) {
-        *self.shared.volume.lock().unwrap() = vol.clamp(0.0, 1.0);
+        self.audio.volume = vol.clamp(0.0, 1.0);
     }
 
     fn audio_queue_len_samples(&self) -> u64 {
-        let ring = self.shared.ring.lock().unwrap();
-        (ring.len() as u64) / (self.output_channels.max(1) as u64)
+        // SAFETY: dev is valid.
+        let queued_bytes = unsafe { (self.lib.SDL_GetQueuedAudioSize)(self.audio.dev) } as u64;
+        let bpf = self.audio.bytes_per_frame.max(1) as u64;
+        queued_bytes / bpf
     }
 }
 
-fn map_sdl_key(kc: Keycode, keymod: Mod) -> Option<PlayerEvent> {
-    let shift = keymod.contains(Mod::LSHIFTMOD) || keymod.contains(Mod::RSHIFTMOD);
-    match kc {
-        Keycode::Q | Keycode::Escape => Some(PlayerEvent::Quit),
-        Keycode::Space => Some(PlayerEvent::TogglePause),
-        Keycode::Left => {
+fn map_sdl_key(sym: i32, modmask: u16) -> Option<PlayerEvent> {
+    let shift = (modmask & ldr::KMOD_SHIFT) != 0;
+    match sym {
+        x if x == ldr::SDLK_q || x == ldr::SDLK_ESCAPE => Some(PlayerEvent::Quit),
+        x if x == ldr::SDLK_SPACE => Some(PlayerEvent::TogglePause),
+        x if x == ldr::SDLK_LEFT => {
             let d = if shift {
                 Duration::from_secs(30)
             } else {
@@ -570,7 +678,7 @@ fn map_sdl_key(kc: Keycode, keymod: Mod) -> Option<PlayerEvent> {
             };
             Some(PlayerEvent::SeekRelative(d, SeekDir::Back))
         }
-        Keycode::Right => {
+        x if x == ldr::SDLK_RIGHT => {
             let d = if shift {
                 Duration::from_secs(30)
             } else {
@@ -578,8 +686,8 @@ fn map_sdl_key(kc: Keycode, keymod: Mod) -> Option<PlayerEvent> {
             };
             Some(PlayerEvent::SeekRelative(d, SeekDir::Forward))
         }
-        Keycode::Up => Some(PlayerEvent::VolumeDelta(5)),
-        Keycode::Down => Some(PlayerEvent::VolumeDelta(-5)),
+        x if x == ldr::SDLK_UP => Some(PlayerEvent::VolumeDelta(5)),
+        x if x == ldr::SDLK_DOWN => Some(PlayerEvent::VolumeDelta(-5)),
         _ => None,
     }
 }

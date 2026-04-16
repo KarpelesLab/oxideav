@@ -21,36 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # oxideplay links against SDL2 (the only crate in the workspace
-      # that depends on a non-Rust library). Install it from the host
-      # package manager so cargo can find it.
-      - name: Install SDL2 (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
-
-      - name: Install SDL2 (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install sdl2
-          # Apple Silicon Homebrew installs to /opt/homebrew, which is
-          # NOT on the default linker search path. Surface it via env.
-          PREFIX="$(brew --prefix)"
-          echo "LIBRARY_PATH=${PREFIX}/lib:${LIBRARY_PATH}" >> "$GITHUB_ENV"
-          echo "DYLD_FALLBACK_LIBRARY_PATH=${PREFIX}/lib:${DYLD_FALLBACK_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
-
-      - name: Install SDL2 (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $url = "https://github.com/libsdl-org/SDL/releases/download/release-2.30.10/SDL2-devel-2.30.10-VC.zip"
-          Invoke-WebRequest -Uri $url -OutFile sdl2.zip
-          Expand-Archive sdl2.zip -DestinationPath sdl2
-          $libDir = (Resolve-Path "sdl2/SDL2-2.30.10/lib/x64").Path
-          # Linker search path: rustc passes LIB through to link.exe.
-          "LIB=$env:LIB;$libDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          # Runtime DLL search path for tests / the oxideplay binary.
-          $libDir | Out-File -FilePath $env:GITHUB_PATH -Append
+      # oxideplay loads SDL2 at runtime via libloading instead of linking
+      # at build time, so SDL2 is *not* required to build or test the
+      # workspace. The binary will simply emit a "SDL2 library not found
+      # at runtime" error if you try to play media without it installed.
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -70,8 +44,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SDL2
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      # libloading is pure Rust and oxideplay no longer links SDL2, so
+      # clippy does not need any system packages installed.
 
       - name: Install Rust toolchain (with rustfmt + clippy)
         uses: dtolnay/rust-toolchain@stable
