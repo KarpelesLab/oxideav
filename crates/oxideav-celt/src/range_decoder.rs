@@ -33,7 +33,7 @@ const EC_WINDOW_SIZE: i32 = 32;
 const EC_UINT_BITS: u32 = 8;
 
 /// log2 fractional precision: results of ec_tell_frac() are in 1/8 bit units.
-pub const BITRES: u32 = 3;
+pub const BITRES: i32 = 3;
 
 /// Range decoder state — exact 1:1 mirror of libopus `ec_ctx`/`ec_dec`.
 pub struct RangeDecoder<'a> {

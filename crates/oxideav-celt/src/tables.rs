@@ -181,6 +181,179 @@ pub const LOG2_FRAC_TABLE: [u8; 24] = [
     0, 8, 13, 16, 19, 21, 23, 24, 26, 27, 28, 29, 30, 31, 32, 32, 33, 34, 34, 35, 36, 36, 37, 37,
 ];
 
+/// log2(N) per band in Q4 (libopus `logN400`).
+#[rustfmt::skip]
+pub const LOGN400: [i16; NB_EBANDS] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 16, 16, 16, 21, 21, 24, 29, 34, 36,
+];
+
+/// PVQ pulse-cache index (libopus `cache_index50`). Indexed
+/// `(LM+1)*nbEBands + i`. Negative entries mean N is too small for this band.
+#[rustfmt::skip]
+pub const CACHE_INDEX50: [i16; 105] = [
+    -1, -1, -1, -1, -1, -1, -1, -1,   0,   0,   0,   0,  41,  41,  41,
+     82,  82, 123, 164, 200, 222,   0,   0,   0,   0,   0,   0,   0,   0,  41,
+     41,  41,  41, 123, 123, 123, 164, 164, 240, 266, 283, 295,  41,  41,  41,
+     41,  41,  41,  41,  41, 123, 123, 123, 123, 240, 240, 240, 266, 266, 305,
+    318, 328, 336, 123, 123, 123, 123, 123, 123, 123, 123, 240, 240, 240, 240,
+    305, 305, 305, 318, 318, 343, 351, 358, 364, 240, 240, 240, 240, 240, 240,
+    240, 240, 305, 305, 305, 305, 343, 343, 343, 351, 351, 370, 376, 382, 387,
+];
+
+/// PVQ pulse-cache bits table (libopus `cache_bits50`). `cache[0]` at any
+/// index `CACHE_INDEX50[(LM+1)*nbEBands+i]` gives `cache.size`, then the
+/// next `cache.size` bytes give the bit cost in 1/8 bit units for q=1..size.
+#[rustfmt::skip]
+pub const CACHE_BITS50: [u8; 392] = [
+    40,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,
+     7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7,
+     7,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7, 40, 15, 23, 28,
+    31, 34, 36, 38, 39, 41, 42, 43, 44, 45, 46, 47, 47, 49, 50,
+    51, 52, 53, 54, 55, 55, 57, 58, 59, 60, 61, 62, 63, 63, 65,
+    66, 67, 68, 69, 70, 71, 71, 40, 20, 33, 41, 48, 53, 57, 61,
+    64, 66, 69, 71, 73, 75, 76, 78, 80, 82, 85, 87, 89, 91, 92,
+    94, 96, 98,101,103,105,107,108,110,112,114,117,119,121,123,
+   124,126,128, 40, 23, 39, 51, 60, 67, 73, 79, 83, 87, 91, 94,
+    97,100,102,105,107,111,115,118,121,124,126,129,131,135,139,
+   142,145,148,150,153,155,159,163,166,169,172,174,177,179, 35,
+    28, 49, 65, 78, 89, 99,107,114,120,126,132,136,141,145,149,
+   153,159,165,171,176,180,185,189,192,199,205,211,216,220,225,
+   229,232,239,245,251, 21, 33, 58, 79, 97,112,125,137,148,157,
+   166,174,182,189,195,201,207,217,227,235,243,251, 17, 35, 63,
+    86,106,123,139,152,165,177,187,197,206,214,222,230,237,250,
+    25, 31, 55, 75, 91,105,117,128,138,146,154,161,168,174,180,
+   185,190,200,208,215,222,229,235,240,245,255, 16, 36, 65, 89,
+   110,128,144,159,173,185,196,207,217,226,234,242,250, 11, 41,
+    74,103,128,151,172,191,209,225,241,255,  9, 43, 79,110,138,
+   163,186,207,227,246, 12, 39, 71, 99,123,144,164,182,198,214,
+   228,241,253,  9, 44, 81,113,142,168,192,214,235,255,  7, 49,
+    90,127,160,191,220,247,  6, 51, 95,134,170,203,234,  7, 47,
+    87,123,155,184,212,237,  6, 52, 97,137,174,208,240,  5, 57,
+   106,151,192,231,  5, 59,111,158,202,243,  5, 55,103,147,187,
+   224,  5, 60,113,161,206,248,  4, 65,122,175,224,  4, 67,127,
+   182,234,
+];
+
+/// PVQ caps (libopus `cache_caps50`). Indexed `(2*LM+C-1)*nbEBands + i`.
+#[rustfmt::skip]
+pub const CACHE_CAPS50: [u8; 168] = [
+    224,224,224,224,224,224,224,224,160,160,160,160,185,185,185,
+    178,178,168,134, 61, 37,224,224,224,224,224,224,224,224,240,
+    240,240,240,207,207,207,198,198,183,144, 66, 40,160,160,160,
+    160,160,160,160,160,185,185,185,185,193,193,193,183,183,172,
+    138, 64, 38,240,240,240,240,240,240,240,240,207,207,207,207,
+    204,204,204,193,193,180,143, 66, 40,185,185,185,185,185,185,
+    185,185,193,193,193,193,193,193,193,183,183,172,138, 65, 39,
+    207,207,207,207,207,207,207,207,204,204,204,204,201,201,201,
+    188,188,176,141, 66, 40,193,193,193,193,193,193,193,193,193,
+    193,193,193,194,194,194,184,184,173,139, 65, 39,204,204,204,
+    204,204,204,204,204,201,201,201,201,198,198,198,187,187,175,
+    140, 66, 40,
+];
+
+/// Mean-energy offsets per band for denormalisation (libopus `eMeans` float).
+pub const E_MEANS: [f32; 25] = [
+    6.437500, 6.250000, 5.750000, 5.312500, 5.062500, 4.812500, 4.500000, 4.375000, 4.875000,
+    4.687500, 4.562500, 4.437500, 4.875000, 4.625000, 4.312500, 4.500000, 4.375000, 4.625000,
+    4.750000, 4.437500, 3.750000, 3.750000, 3.750000, 3.750000, 3.750000,
+];
+
+/// Spread decision ICDF (libopus `spread_icdf`).
+pub const SPREAD_ICDF: [u8; 4] = [25, 23, 2, 0];
+
+/// Allocation trim ICDF (libopus `trim_icdf`).
+pub const TRIM_ICDF: [u8; 11] = [126, 124, 119, 109, 87, 41, 19, 9, 4, 2, 0];
+
+/// Tapset ICDF (libopus `tapset_icdf`).
+pub const TAPSET_ICDF: [u8; 3] = [2, 1, 0];
+
+/// CELT spread mode constants.
+pub const SPREAD_NONE: i32 = 0;
+pub const SPREAD_LIGHT: i32 = 1;
+pub const SPREAD_NORMAL: i32 = 2;
+pub const SPREAD_AGGRESSIVE: i32 = 3;
+
+/// `tf_select_table` (libopus celt.c). Indexed `[LM][4*isTransient + 2*tf_select + per_band]`.
+pub const TF_SELECT_TABLE: [[i8; 8]; 4] = [
+    [0, -1, 0, -1, 0, -1, 0, -1],
+    [0, -1, 0, -2, 1, 0, 1, -1],
+    [0, -2, 0, -3, 2, 0, 1, -1],
+    [0, -2, 0, -3, 3, 0, 1, -1],
+];
+
+/// CELT comb-filter tap sets (libopus celt.c `init_caps`/`comb_filter`).
+pub const COMB_FILTER_TAPS: [[f32; 3]; 3] = [
+    [0.306_640_6, 0.218_750_0, 0.0],
+    [0.460_937_5, 0.246_093_75, 0.0],
+    [0.798_828_1, 0.108_398_44, 0.091_796_88],
+];
+
+/// CELT minimum comb-filter period (libopus `COMBFILTER_MINPERIOD`).
+pub const COMB_FILTER_MINPERIOD: u32 = 15;
+
+/// `MAX_FINE_BITS` from libopus rate.h.
+pub const MAX_FINE_BITS: i32 = 8;
+
+/// `FINE_OFFSET` from libopus rate.h.
+pub const FINE_OFFSET: i32 = 21;
+
+/// `QTHETA_OFFSET` from libopus rate.h.
+pub const QTHETA_OFFSET: i32 = 4;
+
+/// `QTHETA_OFFSET_TWOPHASE` from libopus rate.h.
+pub const QTHETA_OFFSET_TWOPHASE: i32 = 16;
+
+/// `ALLOC_STEPS` from libopus rate.h.
+pub const ALLOC_STEPS: i32 = 6;
+
+/// 60-degree raised-cosine cosine table (libopus `bitexact_cos`).
+/// Returns cos(itheta * pi/16384) in Q15. We implement this via formula.
+pub fn bitexact_cos(x: i16) -> i16 {
+    let x = x as i32;
+    let tmp = (32_768 + (x * x)) >> 16;
+    let mut x2 = 32_767 - tmp;
+    x2 += (x2 * (-7_651 + ((x2 * (8_277 + ((-626 * x2) >> 15))) >> 15))) >> 15;
+    (1 + x2) as i16
+}
+
+/// `bitexact_log2tan` (libopus mathops.h) — returns log2(tan(theta)) approx.
+pub fn bitexact_log2tan(isin: i32, icos: i32) -> i32 {
+    let lc = (icos as u32).leading_zeros() as i32 - 17;
+    let ls = (isin as u32).leading_zeros() as i32 - 17;
+    let icos = icos << lc;
+    let isin = isin << ls;
+    (ls - lc) * (1 << 11) + frac_mul16(isin, frac_mul16(isin, -2_597) + 7_932)
+        - frac_mul16(icos, frac_mul16(icos, -2_597) + 7_932)
+}
+
+#[inline]
+fn frac_mul16(a: i32, b: i32) -> i32 {
+    (16_384 + (a * b)) >> 15
+}
+
+/// Number of pulses for a given quantized index `q` (libopus rate.h
+/// `get_pulses`). Translates encoded q to pulse count K.
+#[inline]
+pub fn get_pulses(q: i32) -> i32 {
+    if q < 8 {
+        q
+    } else {
+        (8 + (q & 7)) << ((q >> 3) - 1)
+    }
+}
+
+/// Per-band PVQ pulse cap lookup. `cap[i] = (cache_caps50[(2*LM+C-1)*nbEBands+i]+64)*C*N >> 2`.
+pub fn init_caps(lm: usize, c: usize) -> [i32; NB_EBANDS] {
+    let mut cap = [0i32; NB_EBANDS];
+    let row = (2 * lm + c - 1) * NB_EBANDS;
+    let m = 1u32 << lm;
+    for i in 0..NB_EBANDS {
+        let n = (EBAND_5MS[i + 1] as u32 - EBAND_5MS[i] as u32) * m;
+        cap[i] = ((CACHE_CAPS50[row + i] as i32 + 64) * c as i32 * n as i32) >> 2;
+    }
+    cap
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

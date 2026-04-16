@@ -1,3 +1,26 @@
+#![allow(
+    dead_code,
+    clippy::needless_range_loop,
+    clippy::excessive_precision,
+    clippy::useless_vec,
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::collapsible_else_if,
+    clippy::nonminimal_bool,
+    clippy::manual_range_contains,
+    clippy::needless_late_init,
+    clippy::needless_return,
+    clippy::let_unit_value,
+    clippy::needless_borrow,
+    unused_mut,
+    unused_variables,
+    unused_assignments,
+    clippy::unnecessary_cast,
+    clippy::manual_memcpy,
+    clippy::neg_multiply,
+    clippy::precedence
+)]
+
 //! Opus audio codec (RFC 6716 bitstream, RFC 7845 in-Ogg mapping).
 //!
 //! What's landed:

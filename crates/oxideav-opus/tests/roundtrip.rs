@@ -227,13 +227,14 @@ fn silk_packets_are_rejected_not_crashed() {
 
 /// CELT-only packets with full audio content currently return
 /// `Unsupported` after the front-of-frame header (silence/post-filter/
-/// transient/intra) is decoded — coarse energy + bit allocation + PVQ +
-/// IMDCT are not yet landed. This test pins the contract: decoder must
-/// not panic, the error must be `Unsupported`, and the message must
-/// identify the next missing CELT stage by its RFC §ref so callers
-/// (and future agents) know exactly what to land next.
+/// CELT decode pipeline runs end-to-end without panicking on real
+/// ffmpeg-produced packets. Audio quality is gated separately by the
+/// `#[ignore]`'d Goertzel test below — this test only pins the contract
+/// that the structure is in place: every packet either produces a real
+/// AudioFrame at the expected rate/length, or returns a CELT-tagged
+/// `Unsupported` (e.g. for a stage we haven't bit-exact'd yet).
 #[test]
-fn celt_header_parses_then_unsupported_with_specific_gap() {
+fn celt_pipeline_runs_end_to_end() {
     let Some(path) = ensure_celt_mono() else {
         eprintln!("skip: ffmpeg / reference unavailable");
         return;
@@ -243,7 +244,7 @@ fn celt_header_parses_then_unsupported_with_specific_gap() {
     let mut dec = oxideav_opus::decoder::make_decoder(&params).expect("make decoder");
 
     let mut tested = 0usize;
-    let mut saw_unsupported = false;
+    let mut saw_audio = false;
     for _ in 0..20 {
         let pkt = match dmx.next_packet() {
             Ok(p) => p,
@@ -253,27 +254,18 @@ fn celt_header_parses_then_unsupported_with_specific_gap() {
         dec.send_packet(&pkt).expect("send");
         match dec.receive_frame() {
             Ok(Frame::Audio(a)) => {
-                // A silence-flag CELT frame (rare but valid) would produce
-                // a real AudioFrame of zeros. Accept that without failing.
                 assert_eq!(a.sample_rate, 48_000);
                 assert_eq!(a.samples, 960);
+                saw_audio = true;
             }
             Ok(Frame::Video(_)) => panic!("audio decoder returned video frame"),
             Err(Error::Unsupported(msg)) => {
                 let lc = msg.to_lowercase();
                 assert!(
-                    lc.contains("celt"),
-                    "Unsupported message must mention CELT: {}",
+                    lc.contains("celt") || lc.contains("silk") || lc.contains("hybrid"),
+                    "Unsupported message should mention codec mode: {}",
                     msg
                 );
-                // The new contract: the message must identify the next
-                // missing stage by RFC §ref so the gap is unambiguous.
-                assert!(
-                    lc.contains("4.3.2") || lc.contains("4.3.3") || lc.contains("4.3.4"),
-                    "Unsupported message must name the next missing RFC §ref: {}",
-                    msg
-                );
-                saw_unsupported = true;
             }
             Err(e) => panic!("unexpected error: {:?}", e),
         }
@@ -281,8 +273,8 @@ fn celt_header_parses_then_unsupported_with_specific_gap() {
     }
     assert!(tested > 0, "no packets tested");
     assert!(
-        saw_unsupported,
-        "expected at least one Unsupported with §ref gap from the full-CELT path"
+        saw_audio,
+        "expected at least one CELT packet to produce audio"
     );
 }
 
