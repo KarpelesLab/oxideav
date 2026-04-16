@@ -177,4 +177,4 @@ cargo run -p oxideav-cli -- --help
 
 ## License
 
-TBD (likely MIT OR Apache-2.0).
+MIT — see [`LICENSE`](LICENSE). Copyright © 2026 Karpelès Lab Inc.
