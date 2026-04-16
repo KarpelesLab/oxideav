@@ -22,6 +22,10 @@ pub fn video_codec_id(fourcc: &[u8; 4]) -> CodecId {
     let name = match &upper {
         b"MJPG" => "mjpeg",
         b"FFV1" => "ffv1",
+        // MPEG-4 Part 2 / ASP — every non-trivial MP4/AVI encoder emits one
+        // of these FourCCs for the same underlying codec (ISO/IEC 14496-2).
+        b"XVID" | b"DIVX" | b"DX50" | b"MP4V" | b"FMP4" | b"DIV3" | b"DIV4" | b"DIV5" | b"DIV6"
+        | b"3IV2" | b"M4S2" | b"MP4S" | b"DIVF" | b"BLZ0" => "mpeg4video",
         // BI_RGB (uncompressed): biCompression=0x00000000. FourCC is all zeros.
         [0, 0, 0, 0] => "rgb24",
         b"DIB " => "rgb24",
@@ -193,6 +197,15 @@ mod tests {
         assert_eq!(video_codec_id(b"mjpg").as_str(), "mjpeg");
         assert_eq!(video_codec_id(b"FFV1").as_str(), "ffv1");
         assert_eq!(video_codec_id(&[0, 0, 0, 0]).as_str(), "rgb24");
+        // MPEG-4 Part 2 FourCCs — case-insensitive.
+        assert_eq!(video_codec_id(b"XVID").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"xvid").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"DIVX").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"divx").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"DX50").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"MP4V").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"FMP4").as_str(), "mpeg4video");
+        assert_eq!(video_codec_id(b"fmp4").as_str(), "mpeg4video");
     }
 
     #[test]

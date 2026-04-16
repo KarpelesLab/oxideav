@@ -1,0 +1,13 @@
+[package]
+name = "oxideav-mpeg4video"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure-Rust MPEG-4 Part 2 Video (ISO/IEC 14496-2) decoder for oxideav"
+
+[dependencies]
+oxideav-core = { workspace = true }
+oxideav-codec = { workspace = true }
