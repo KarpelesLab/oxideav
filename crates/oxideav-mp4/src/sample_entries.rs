@@ -33,10 +33,32 @@ pub(crate) fn sample_entry_for(params: &CodecParameters) -> Result<SampleEntry> 
         "flac" => flac_entry(params),
         "aac" => aac_entry(params),
         "h264" => h264_entry(params),
+        "mjpeg" => mjpeg_entry(params),
         other => Err(Error::unsupported(format!(
             "mp4 muxer: no sample entry for codec {other}"
         ))),
     }
+}
+
+/// Motion JPEG sample entry. Modern ISOBMFF uses the `jpeg` FourCC with a
+/// plain VisualSampleEntry; each sample is a self-contained JPEG byte
+/// stream. (The legacy QuickTime `mjpa`/`mjpb` forms have extra quirks
+/// we don't emit today.)
+fn mjpeg_entry(params: &CodecParameters) -> Result<SampleEntry> {
+    if params.media_type != MediaType::Video {
+        return Err(Error::invalid("mp4 muxer: mjpeg must be video"));
+    }
+    let width = params
+        .width
+        .ok_or_else(|| Error::invalid("mp4 muxer: mjpeg requires width"))?;
+    let height = params
+        .height
+        .ok_or_else(|| Error::invalid("mp4 muxer: mjpeg requires height"))?;
+    let body = visual_preamble(width, height).to_vec();
+    Ok(SampleEntry {
+        fourcc: *b"jpeg",
+        body,
+    })
 }
 
 /// 28-byte AudioSampleEntryV0 preamble.

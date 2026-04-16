@@ -353,9 +353,10 @@ fn parse_audio_sample_entry(entry: &[u8], t: &mut Track) -> Result<()> {
 }
 
 fn parse_video_sample_entry(entry: &[u8], t: &mut Track) -> Result<()> {
-    // VisualSampleEntry: 16 bytes pre-defined/reserved, 2 bytes width, 2 bytes height, ...
-    // Offsets per ISO/IEC 14496-12.
-    if entry.len() < 80 {
+    // VisualSampleEntry: 6 reserved + 2 data_ref_idx + 16 pre_defined +
+    // 2 width + 2 height + ... = 78 bytes total payload. Offsets per
+    // ISO/IEC 14496-12. We only need up to byte 28 for width + height.
+    if entry.len() < 28 {
         return Ok(());
     }
     let width = u16::from_be_bytes([entry[24], entry[25]]);

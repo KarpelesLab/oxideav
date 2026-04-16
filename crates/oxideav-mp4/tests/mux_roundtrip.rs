@@ -436,3 +436,107 @@ fn real_flac_encoder_roundtrip() {
         "decoded samples are not bit-exact after MP4 roundtrip"
     );
 }
+
+#[test]
+fn mjpeg_roundtrip_via_mp4() {
+    // Encode a tiny video frame to JPEG, mux it into MP4 as "mjpeg",
+    // demux back, check the sample entry → codec_id mapping yields
+    // "mjpeg" and that the decoded bytes round-trip.
+    use oxideav_codec::CodecRegistry;
+    use oxideav_core::{Frame, MediaType, PixelFormat, VideoFrame, VideoPlane};
+
+    // Build a synthetic 64x64 Yuv420P frame (gradient).
+    let w = 64u32;
+    let h = 64u32;
+    let chroma_w = (w / 2) as usize;
+    let chroma_h = (h / 2) as usize;
+    let y_plane: Vec<u8> = (0..(w * h) as usize).map(|i| (i % 256) as u8).collect();
+    let cb_plane: Vec<u8> = vec![128u8; chroma_w * chroma_h];
+    let cr_plane: Vec<u8> = vec![128u8; chroma_w * chroma_h];
+
+    let time_base = TimeBase::new(1, 25); // 25 fps
+    let frame = Frame::Video(VideoFrame {
+        format: PixelFormat::Yuv420P,
+        width: w,
+        height: h,
+        pts: Some(0),
+        time_base,
+        planes: vec![
+            VideoPlane {
+                stride: w as usize,
+                data: y_plane,
+            },
+            VideoPlane {
+                stride: chroma_w,
+                data: cb_plane,
+            },
+            VideoPlane {
+                stride: chroma_w,
+                data: cr_plane,
+            },
+        ],
+    });
+
+    // Encode one JPEG packet.
+    let mut codecs = CodecRegistry::new();
+    oxideav_mjpeg::register(&mut codecs);
+
+    let mut enc_params = CodecParameters::video(CodecId::new("mjpeg"));
+    enc_params.media_type = MediaType::Video;
+    enc_params.width = Some(w);
+    enc_params.height = Some(h);
+    enc_params.pixel_format = Some(PixelFormat::Yuv420P);
+    let mut enc = codecs.make_encoder(&enc_params).expect("mjpeg encoder");
+    enc.send_frame(&frame).unwrap();
+    let jpeg_bytes = match enc.receive_packet() {
+        Ok(p) => p.data,
+        Err(e) => panic!("encoder did not produce packet: {e:?}"),
+    };
+    assert!(!jpeg_bytes.is_empty());
+    assert_eq!(
+        &jpeg_bytes[0..2],
+        &[0xFF, 0xD8],
+        "encoded frame starts with SOI"
+    );
+
+    // Mux to a tempfile, then demux back.
+    let stream_in = StreamInfo {
+        index: 0,
+        time_base,
+        duration: None,
+        start_time: Some(0),
+        params: enc_params.clone(),
+    };
+    let tmp = std::env::temp_dir().join("oxideav-mp4-mjpeg-roundtrip.mp4");
+    {
+        let f = std::fs::File::create(&tmp).unwrap();
+        let ws: Box<dyn WriteSeek> = Box::new(f);
+        let mut muxer = oxideav_mp4::muxer::open(ws, std::slice::from_ref(&stream_in)).unwrap();
+        muxer.write_header().unwrap();
+        let mut pkt = Packet::new(0, time_base, jpeg_bytes.clone());
+        pkt.pts = Some(0);
+        pkt.dts = Some(0);
+        pkt.flags.keyframe = true;
+        muxer.write_packet(&pkt).unwrap();
+        muxer.write_trailer().unwrap();
+    }
+
+    let rs: Box<dyn ReadSeek> = Box::new(std::fs::File::open(&tmp).unwrap());
+    let mut demuxer = oxideav_mp4::demux::open(rs).unwrap();
+    let streams = demuxer.streams().to_vec();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0].params.codec_id.as_str(), "mjpeg");
+    assert_eq!(streams[0].params.media_type, MediaType::Video);
+    assert_eq!(streams[0].params.width, Some(w));
+    assert_eq!(streams[0].params.height, Some(h));
+
+    let out_pkt = demuxer.next_packet().unwrap();
+    assert_eq!(
+        out_pkt.data, jpeg_bytes,
+        "MP4 roundtrip preserves JPEG bytes"
+    );
+    assert!(matches!(
+        demuxer.next_packet(),
+        Err(oxideav_core::Error::Eof)
+    ));
+}

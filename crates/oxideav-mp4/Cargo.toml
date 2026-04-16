@@ -16,3 +16,4 @@ oxideav-container = { workspace = true }
 [dev-dependencies]
 oxideav-basic = { workspace = true }
 oxideav-flac = { workspace = true }
+oxideav-mjpeg = { workspace = true }

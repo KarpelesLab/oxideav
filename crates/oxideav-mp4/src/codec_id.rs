@@ -13,6 +13,7 @@ pub fn from_sample_entry(fourcc: &[u8; 4]) -> CodecId {
         b"vp08" => "vp8",
         b"vp09" => "vp9",
         b"av01" => "av1",
+        b"jpeg" | b"mjpa" | b"mjpb" => "mjpeg",
         b"lpcm" | b"sowt" | b"twos" => "pcm_s16le",
         other => {
             let s = std::str::from_utf8(other).unwrap_or("????");

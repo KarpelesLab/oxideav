@@ -16,7 +16,7 @@ pub mod time;
 pub use capabilities::{CodecCapabilities, CodecPreferences, DEFAULT_PRIORITY};
 pub use error::{Error, Result};
 pub use format::{MediaType, PixelFormat, SampleFormat};
-pub use frame::{AudioFrame, Frame, VideoFrame};
+pub use frame::{AudioFrame, Frame, VideoFrame, VideoPlane};
 pub use packet::Packet;
 pub use rational::Rational;
 pub use stream::{CodecId, CodecParameters, StreamInfo};
