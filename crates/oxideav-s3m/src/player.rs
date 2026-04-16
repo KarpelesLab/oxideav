@@ -299,10 +299,8 @@ impl PlayerState {
 
             // Tick-0 effects (instant / row-level).
             match ch.command {
-                cmd::A_SET_SPEED => {
-                    if ch.info != 0 {
-                        row_speed = Some(ch.info);
-                    }
+                cmd::A_SET_SPEED if ch.info != 0 => {
+                    row_speed = Some(ch.info);
                 }
                 cmd::B_POS_JUMP => {
                     row_jump = Some(Jump {
@@ -318,10 +316,8 @@ impl PlayerState {
                         row: r,
                     });
                 }
-                cmd::T_SET_TEMPO => {
-                    if ch.info >= 0x20 {
-                        row_tempo = Some(ch.info);
-                    }
+                cmd::T_SET_TEMPO if ch.info >= 0x20 => {
+                    row_tempo = Some(ch.info);
                 }
                 cmd::V_GLOBAL_VOL => {
                     row_global_vol = Some(ch.info.min(64));
@@ -366,18 +362,16 @@ impl PlayerState {
             let x = ch.info >> 4;
             let y = ch.info & 0x0F;
             match ch.command {
-                cmd::J_ARPEGGIO => {
-                    // Jxy: cycle through note, note+x semitones, note+y
-                    // semitones across consecutive ticks (0, 1, 2, 0, 1, 2…).
-                    if (x | y) != 0 && ch.last_note != 0 {
-                        let semis = match tick % 3 {
-                            0 => 0,
-                            1 => x as i32,
-                            _ => y as i32,
-                        };
-                        let mult = 2.0f32.powf(semis as f32 / 12.0);
-                        ch.frequency = ch.target_frequency * mult;
-                    }
+                // Jxy: cycle through note, note+x semitones, note+y
+                // semitones across consecutive ticks (0, 1, 2, 0, 1, 2…).
+                cmd::J_ARPEGGIO if (x | y) != 0 && ch.last_note != 0 => {
+                    let semis = match tick % 3 {
+                        0 => 0,
+                        1 => x as i32,
+                        _ => y as i32,
+                    };
+                    let mult = 2.0f32.powf(semis as f32 / 12.0);
+                    ch.frequency = ch.target_frequency * mult;
                 }
                 cmd::K_VIB_VOL => {
                     // Kxy: vibrato (uses last H params? — ST3 uses current
@@ -410,28 +404,26 @@ impl PlayerState {
                     }
                     Self::apply_dxy(ch, x, y);
                 }
-                cmd::Q_RETRIGGER => {
-                    // Qxy: retrigger every y ticks; x = volume change code.
-                    if y != 0 && (tick % y) == 0 && tick > 0 {
-                        ch.sample_pos = 0.0;
-                        // Volume modifier x (subset implemented):
-                        match x {
-                            0x1 => ch.volume = ch.volume.saturating_sub(1),
-                            0x2 => ch.volume = ch.volume.saturating_sub(2),
-                            0x3 => ch.volume = ch.volume.saturating_sub(4),
-                            0x4 => ch.volume = ch.volume.saturating_sub(8),
-                            0x5 => ch.volume = ch.volume.saturating_sub(16),
-                            0x6 => ch.volume = (ch.volume * 2 / 3).min(64),
-                            0x7 => ch.volume /= 2,
-                            0x9 => ch.volume = (ch.volume + 1).min(64),
-                            0xA => ch.volume = (ch.volume + 2).min(64),
-                            0xB => ch.volume = (ch.volume + 4).min(64),
-                            0xC => ch.volume = (ch.volume + 8).min(64),
-                            0xD => ch.volume = (ch.volume + 16).min(64),
-                            0xE => ch.volume = ((ch.volume as u16) * 3 / 2).min(64) as u8,
-                            0xF => ch.volume = (ch.volume * 2).min(64),
-                            _ => {}
-                        }
+                // Qxy: retrigger every y ticks; x = volume change code.
+                cmd::Q_RETRIGGER if y != 0 && (tick % y) == 0 && tick > 0 => {
+                    ch.sample_pos = 0.0;
+                    // Volume modifier x (subset implemented):
+                    match x {
+                        0x1 => ch.volume = ch.volume.saturating_sub(1),
+                        0x2 => ch.volume = ch.volume.saturating_sub(2),
+                        0x3 => ch.volume = ch.volume.saturating_sub(4),
+                        0x4 => ch.volume = ch.volume.saturating_sub(8),
+                        0x5 => ch.volume = ch.volume.saturating_sub(16),
+                        0x6 => ch.volume = (ch.volume * 2 / 3).min(64),
+                        0x7 => ch.volume /= 2,
+                        0x9 => ch.volume = (ch.volume + 1).min(64),
+                        0xA => ch.volume = (ch.volume + 2).min(64),
+                        0xB => ch.volume = (ch.volume + 4).min(64),
+                        0xC => ch.volume = (ch.volume + 8).min(64),
+                        0xD => ch.volume = (ch.volume + 16).min(64),
+                        0xE => ch.volume = ((ch.volume as u16) * 3 / 2).min(64) as u8,
+                        0xF => ch.volume = (ch.volume * 2).min(64),
+                        _ => {}
                     }
                 }
                 cmd::R_TREMOLO => {
@@ -446,32 +438,26 @@ impl PlayerState {
                     }
                 }
                 cmd::D_VOL_SLIDE => Self::apply_dxy(ch, x, y),
-                cmd::E_SLIDE_DOWN => {
-                    // Exx: portamento down. Each tick: freq *= 2^(-param/768).
-                    // Fine / extra-fine slides (0xEy / 0xFy) are tick-0 only
-                    // — skip on per-tick path.
-                    if ch.info != 0 && ch.info < 0xE0 {
-                        let f = 2.0f32.powf(-(ch.info as f32) / 768.0);
-                        ch.frequency *= f;
-                    }
+                // Exx: portamento down. Each tick: freq *= 2^(-param/768).
+                // Fine / extra-fine slides (0xEy / 0xFy) are tick-0 only
+                // — skip on per-tick path.
+                cmd::E_SLIDE_DOWN if ch.info != 0 && ch.info < 0xE0 => {
+                    let f = 2.0f32.powf(-(ch.info as f32) / 768.0);
+                    ch.frequency *= f;
                 }
-                cmd::F_SLIDE_UP => {
-                    if ch.info != 0 && ch.info < 0xE0 {
-                        let f = 2.0f32.powf((ch.info as f32) / 768.0);
-                        ch.frequency *= f;
-                    }
+                cmd::F_SLIDE_UP if ch.info != 0 && ch.info < 0xE0 => {
+                    let f = 2.0f32.powf((ch.info as f32) / 768.0);
+                    ch.frequency *= f;
                 }
-                cmd::G_TONE_PORTA => {
-                    // Gxx: slide toward target at rate info/per tick.
-                    if ch.info != 0 && ch.target_frequency > 0.0 {
-                        let step = ch.info as f32;
-                        if ch.frequency < ch.target_frequency {
-                            let f = 2.0f32.powf(step / 768.0);
-                            ch.frequency = (ch.frequency * f).min(ch.target_frequency);
-                        } else if ch.frequency > ch.target_frequency {
-                            let f = 2.0f32.powf(-step / 768.0);
-                            ch.frequency = (ch.frequency * f).max(ch.target_frequency);
-                        }
+                // Gxx: slide toward target at rate info/per tick.
+                cmd::G_TONE_PORTA if ch.info != 0 && ch.target_frequency > 0.0 => {
+                    let step = ch.info as f32;
+                    if ch.frequency < ch.target_frequency {
+                        let f = 2.0f32.powf(step / 768.0);
+                        ch.frequency = (ch.frequency * f).min(ch.target_frequency);
+                    } else if ch.frequency > ch.target_frequency {
+                        let f = 2.0f32.powf(-step / 768.0);
+                        ch.frequency = (ch.frequency * f).max(ch.target_frequency);
                     }
                 }
                 cmd::H_VIBRATO => {
