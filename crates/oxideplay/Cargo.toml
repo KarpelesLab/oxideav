@@ -1,0 +1,21 @@
+[package]
+name = "oxideplay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reference media player for the oxideav framework (SDL2 + crossterm)"
+
+# This is the *only* crate in the workspace permitted to pull in a C
+# dependency (via rust-sdl2 / sdl2-sys). The library half of oxideav
+# remains 100% pure Rust — do not propagate these deps upward.
+[dependencies]
+oxideav = { workspace = true }
+oxideav-core = { workspace = true }
+oxideav-codec = { workspace = true }
+oxideav-container = { workspace = true }
+clap = { workspace = true }
+crossterm = "0.28"
+sdl2 = "0.37"

@@ -22,6 +22,15 @@ pub trait Demuxer: Send {
     /// should override this. The default is a no-op — the pipeline
     /// drops unwanted packets on the floor.
     fn set_active_streams(&mut self, _indices: &[u32]) {}
+
+    /// Seek to the nearest keyframe at or before `pts` (in the given
+    /// stream's time base). Returns the actual timestamp seeked to, or
+    /// `Error::Unsupported` if this demuxer can't seek.
+    fn seek_to(&mut self, _stream_index: u32, _pts: i64) -> Result<i64> {
+        Err(oxideav_core::Error::unsupported(
+            "this demuxer does not support seeking",
+        ))
+    }
 }
 
 /// Writes packets into a container.
@@ -57,3 +66,35 @@ pub trait WriteSeek: Write + Seek + Send {}
 impl<T: Write + Seek + Send> WriteSeek for T {}
 
 pub use registry::ContainerRegistry;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxideav_core::Error;
+
+    struct DummyDemuxer;
+
+    impl Demuxer for DummyDemuxer {
+        fn format_name(&self) -> &str {
+            "dummy"
+        }
+        fn streams(&self) -> &[StreamInfo] {
+            &[]
+        }
+        fn next_packet(&mut self) -> Result<Packet> {
+            Err(Error::Eof)
+        }
+    }
+
+    #[test]
+    fn default_seek_to_is_unsupported() {
+        let mut d = DummyDemuxer;
+        match d.seek_to(0, 0) {
+            Err(Error::Unsupported(_)) => {}
+            other => panic!(
+                "expected default seek_to to return Unsupported, got {:?}",
+                other
+            ),
+        }
+    }
+}

@@ -930,3 +930,58 @@ fn chunk_offsets_patched_after_faststart() {
         );
     }
 }
+
+#[test]
+fn seek_to_nearest_keyframe() {
+    // Mux a PCM stream where every packet is a keyframe (since PCM is intra-only).
+    // Seek to a target pts and verify that the next packet produced comes from
+    // a sample whose pts <= target.
+    let stream = pcm_stream_info();
+    let frames_per_packet: i64 = 1024;
+    let total_packets = 10;
+
+    let tmp = std::env::temp_dir().join("oxideav-mp4-seek.mp4");
+    {
+        let f = std::fs::File::create(&tmp).unwrap();
+        let ws: Box<dyn WriteSeek> = Box::new(f);
+        let mut mux = oxideav_mp4::muxer::open(ws, std::slice::from_ref(&stream)).unwrap();
+        mux.write_header().unwrap();
+        for i in 0..total_packets {
+            let payload = make_pcm_payload(frames_per_packet as usize);
+            let mut pkt = Packet::new(0, stream.time_base, payload);
+            pkt.pts = Some((i as i64) * frames_per_packet);
+            pkt.duration = Some(frames_per_packet);
+            pkt.flags.keyframe = true;
+            mux.write_packet(&pkt).unwrap();
+        }
+        mux.write_trailer().unwrap();
+    }
+
+    let rs: Box<dyn ReadSeek> = Box::new(std::fs::File::open(&tmp).unwrap());
+    let mut dmx = oxideav_mp4::demux::open(rs).unwrap();
+
+    // Seek to pts just past sample 5's start. Should land on sample 5.
+    let target_pts = 5 * frames_per_packet + 100;
+    let landed = dmx
+        .seek_to(0, target_pts)
+        .expect("MP4 demuxer should support seeking");
+    assert_eq!(
+        landed,
+        5 * frames_per_packet,
+        "expected to land on keyframe at pts={}",
+        5 * frames_per_packet
+    );
+    // Next packet should have pts == landed.
+    let p = dmx.next_packet().unwrap();
+    assert_eq!(p.pts, Some(landed));
+
+    // Seek to pts 0 — should land on sample 0.
+    let landed = dmx.seek_to(0, 0).unwrap();
+    assert_eq!(landed, 0);
+    let p = dmx.next_packet().unwrap();
+    assert_eq!(p.pts, Some(0));
+
+    // Seek far past end — should land on the last keyframe.
+    let landed = dmx.seek_to(0, i64::MAX / 2).unwrap();
+    assert_eq!(landed, (total_packets as i64 - 1) * frames_per_packet);
+}

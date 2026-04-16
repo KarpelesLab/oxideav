@@ -109,7 +109,25 @@ emits recognisable audio today (sine-wave Goertzel ratio ~32× at
 target freq vs noise) with rough quality; a multi-session effort to
 reach libvorbis-quality parity is ongoing.
 
-CLI verbs: `list`, `probe`, `remux`, `transcode`. Example:
+## Playback
+
+An opt-in binary crate `oxideplay` implements a reference player with
+SDL2 (audio + video) and a crossterm TUI. **The `oxideplay` crate is
+the ONLY place in the workspace allowed to depend on SDL2 or any other
+non-pure-Rust library** — the core `oxideav` library keeps its pure-
+Rust invariant so it can ship on servers without graphical deps.
+
+```
+cargo run -p oxideplay -- /path/to/file.mkv
+```
+
+Keybinds: `q` quit, `space` pause, `← / →` seek ±5 s, `shift+← / →`
+seek ±30 s, `↑ / ↓` volume. Works from the SDL window (when a video
+stream is present) or from the TTY.
+
+## CLI
+
+`oxideav` command-line verbs: `list`, `probe`, `remux`, `transcode`. Example:
 
 ```
 $ oxideav transcode song.flac song.wav

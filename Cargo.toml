@@ -29,6 +29,7 @@ members = [
     "crates/oxideav-speex",
     "crates/oxideav",
     "crates/oxideav-cli",
+    "crates/oxideplay",
 ]
 
 [workspace.package]

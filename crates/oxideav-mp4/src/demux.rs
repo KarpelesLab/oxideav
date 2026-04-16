@@ -85,6 +85,9 @@ struct Track {
     stsc: Vec<(u32, u32, u32)>, // (first_chunk, samples_per_chunk, sample_description_index)
     stsz: Vec<u32>,        // per-sample sizes (or `uniform`-derived vec of same size)
     chunk_offsets: Vec<u64>, // absolute file offsets (stco or co64)
+    /// 1-based sample indices that are sync (key) frames. Empty means
+    /// "all samples are sync frames" per ISO/IEC 14496-12.
+    stss: Vec<u32>,
 }
 
 fn parse_moov(moov: &[u8]) -> Result<Vec<Track>> {
@@ -128,6 +131,7 @@ fn parse_trak(body: &[u8]) -> Result<Option<Track>> {
         stsc: Vec::new(),
         stsz: Vec::new(),
         chunk_offsets: Vec::new(),
+        stss: Vec::new(),
     };
     let mut has_media = false;
     let mut cur = std::io::Cursor::new(body);
@@ -260,6 +264,7 @@ fn parse_stbl(body: &[u8], t: &mut Track) -> Result<()> {
             STZ2 => t.stsz = parse_stz2(&b)?,
             STCO => t.chunk_offsets = parse_stco(&b)?,
             CO64 => t.chunk_offsets = parse_co64(&b)?,
+            STSS => t.stss = parse_stss(&b)?,
             _ => {}
         }
     }
@@ -472,6 +477,28 @@ fn parse_stz2(body: &[u8]) -> Result<Vec<u32>> {
     Ok(out)
 }
 
+fn parse_stss(body: &[u8]) -> Result<Vec<u32>> {
+    if body.len() < 8 {
+        return Err(Error::invalid("MP4: stss too short"));
+    }
+    let count = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as usize;
+    let mut out = Vec::with_capacity(count);
+    let mut off = 8;
+    for _ in 0..count {
+        if off + 4 > body.len() {
+            return Err(Error::invalid("MP4: stss truncated"));
+        }
+        out.push(u32::from_be_bytes([
+            body[off],
+            body[off + 1],
+            body[off + 2],
+            body[off + 3],
+        ]));
+        off += 4;
+    }
+    Ok(out)
+}
+
 fn parse_stco(body: &[u8]) -> Result<Vec<u64>> {
     if body.len() < 8 {
         return Err(Error::invalid("MP4: stco too short"));
@@ -526,6 +553,7 @@ struct SampleRef {
     size: u32,
     pts: i64,
     duration: i64,
+    keyframe: bool,
 }
 
 fn expand_samples(t: &Track, track_idx: u32, out: &mut Vec<SampleRef>) -> Result<()> {
@@ -593,6 +621,13 @@ fn expand_samples(t: &Track, track_idx: u32, out: &mut Vec<SampleRef>) -> Result
         }
     }
 
+    // Per-sample keyframe flags. Per ISO/IEC 14496-12, an absent or empty
+    // stss means every sample is a sync frame (this is the norm for audio
+    // and intra-only video). Otherwise only the 1-based indices listed in
+    // stss are sync frames.
+    let stss_all_keyframes = t.stss.is_empty();
+    let stss_set: std::collections::HashSet<u32> = t.stss.iter().copied().collect();
+
     // Compute each sample's absolute offset.
     for i in 0..n_samples {
         let chunk = chunk_of_sample[i] as usize;
@@ -610,12 +645,15 @@ fn expand_samples(t: &Track, track_idx: u32, out: &mut Vec<SampleRef>) -> Result
         }
         let size = t.stsz[i];
         let (pts_v, dur) = pts[i];
+        let one_based = (i as u32) + 1;
+        let keyframe = stss_all_keyframes || stss_set.contains(&one_based);
         out.push(SampleRef {
             track_idx,
             offset: chunk_off + preceding,
             size,
             pts: pts_v,
             duration: dur,
+            keyframe,
         });
     }
     Ok(())
@@ -688,8 +726,50 @@ impl Demuxer for Mp4Demuxer {
         pkt.pts = Some(s.pts);
         pkt.dts = Some(s.pts);
         pkt.duration = Some(s.duration);
-        pkt.flags.keyframe = true;
+        pkt.flags.keyframe = s.keyframe;
         Ok(pkt)
+    }
+
+    fn seek_to(&mut self, stream_index: u32, pts: i64) -> Result<i64> {
+        if stream_index as usize >= self.streams.len() {
+            return Err(Error::invalid(format!(
+                "MP4: stream index {stream_index} out of range"
+            )));
+        }
+        // Find the last keyframe of this stream with pts <= target.
+        let mut best_cursor: Option<usize> = None;
+        let mut best_pts: i64 = 0;
+        for (i, s) in self.samples.iter().enumerate() {
+            if s.track_idx != stream_index || !s.keyframe {
+                continue;
+            }
+            if s.pts <= pts {
+                if best_cursor.is_none() || s.pts >= best_pts {
+                    best_cursor = Some(i);
+                    best_pts = s.pts;
+                }
+            } else {
+                break;
+            }
+        }
+        // If no keyframe at-or-before target but there is any keyframe,
+        // fall back to the first keyframe of this stream (pts 0).
+        if best_cursor.is_none() {
+            for (i, s) in self.samples.iter().enumerate() {
+                if s.track_idx == stream_index && s.keyframe {
+                    best_cursor = Some(i);
+                    best_pts = s.pts;
+                    break;
+                }
+            }
+        }
+        let cursor = best_cursor.ok_or_else(|| {
+            Error::unsupported(format!(
+                "MP4: no keyframes in stream {stream_index} to seek to"
+            ))
+        })?;
+        self.cursor = cursor;
+        Ok(best_pts)
     }
 }
 
