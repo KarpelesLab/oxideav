@@ -6,7 +6,6 @@
 //! * Total bitrate is substantially less than an all-I encode.
 //! * (Optional) ffmpeg's `mpeg4` decoder accepts our elementary stream.
 
-use std::path::Path;
 use std::process::Command;
 
 use oxideav_codec::Encoder;
@@ -224,7 +223,8 @@ fn p_vop_round_trip_psnr_and_bitrate() {
     for f in &decoded {
         our_yuv.extend_from_slice(&flatten_frame(f));
     }
-    std::fs::write("/tmp/oxideav_pvop_ours_decoded.yuv", &our_yuv).ok();
+    let tmp = std::env::temp_dir();
+    std::fs::write(tmp.join("oxideav_pvop_ours_decoded.yuv"), &our_yuv).ok();
 }
 
 /// FFmpeg interop: encode with our encoder, decode with ffmpeg. Skip when
@@ -257,10 +257,11 @@ fn p_vop_ffmpeg_decode() {
         }
     }
 
-    let es_path = "/tmp/oxideav_pvop_ours.m4v";
-    std::fs::write(es_path, &es).expect("write m4v");
-    let yuv_out = "/tmp/oxideav_pvop_ffmpeg.yuv";
-    let _ = std::fs::remove_file(yuv_out);
+    let tmp = std::env::temp_dir();
+    let es_path = tmp.join("oxideav_pvop_ours.m4v");
+    std::fs::write(&es_path, &es).expect("write m4v");
+    let yuv_out = tmp.join("oxideav_pvop_ffmpeg.yuv");
+    let _ = std::fs::remove_file(&yuv_out);
     let status = Command::new("ffmpeg")
         .args([
             "-y",
@@ -270,17 +271,17 @@ fn p_vop_ffmpeg_decode() {
             "-f",
             "m4v",
             "-i",
-            es_path,
+            es_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            yuv_out,
+            yuv_out.to_str().unwrap(),
         ])
         .status()
         .expect("run ffmpeg");
     assert!(status.success(), "ffmpeg failed to decode our P-VOP stream");
-    let ffmpeg_decoded = std::fs::read(yuv_out).expect("read ffmpeg output");
+    let ffmpeg_decoded = std::fs::read(&yuv_out).expect("read ffmpeg output");
     let per_frame_bytes = (width as usize * height as usize * 3) / 2;
     assert!(
         ffmpeg_decoded.len() >= per_frame_bytes,
@@ -311,5 +312,5 @@ fn p_vop_ffmpeg_decode() {
         p1 > 25.0,
         "ffmpeg first P-VOP PSNR {p1:.2} dB below 25 dB — bitstream or MV drift"
     );
-    let _ = Path::new(es_path);
+    let _ = &es_path;
 }

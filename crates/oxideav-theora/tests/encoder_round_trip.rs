@@ -15,7 +15,7 @@ use oxideav_theora::{
 /// Build a test 64x64 yuv420p frame from the canonical input file generated
 /// by ffmpeg's `testsrc` filter.
 fn load_testsrc_frame() -> Option<VideoFrame> {
-    let raw = std::fs::read("/tmp/theora_in.yuv").ok()?;
+    let raw = std::fs::read(std::env::temp_dir().join("theora_in.yuv")).ok()?;
     if raw.len() < 64 * 64 + 2 * 32 * 32 {
         return None;
     }
@@ -94,7 +94,7 @@ fn collect_encoded_packets(enc: &mut dyn Encoder, frame: &VideoFrame) -> Vec<Pac
 #[test]
 fn encode_intra_frame_round_trip_via_own_decoder() {
     let Some(frame) = load_testsrc_frame() else {
-        eprintln!("skipped: /tmp/theora_in.yuv missing");
+        eprintln!("skipped: theora_in.yuv missing from temp dir");
         return;
     };
     let mut enc = build_encoder();
@@ -157,7 +157,7 @@ fn encode_intra_frame_round_trip_via_own_decoder() {
 #[test]
 fn ffmpeg_can_decode_our_intra_frame() {
     let Some(frame) = load_testsrc_frame() else {
-        eprintln!("skipped: /tmp/theora_in.yuv missing");
+        eprintln!("skipped: theora_in.yuv missing from temp dir");
         return;
     };
     if Command::new("ffmpeg").arg("-version").output().is_err() {
@@ -196,8 +196,11 @@ fn ffmpeg_can_decode_our_intra_frame() {
     let granule: u64 = 1u64 << 6;
     write_ogg_page(&mut ogg, serial, 2, granule, &[&pkts[3].data], false, true);
 
-    std::fs::write("/tmp/our_output.ogv", &ogg).expect("write ogg");
-    let _ = std::fs::remove_file("/tmp/check.yuv");
+    let tmp = std::env::temp_dir();
+    let ogv_path = tmp.join("our_output.ogv");
+    let check_path = tmp.join("check.yuv");
+    std::fs::write(&ogv_path, &ogg).expect("write ogg");
+    let _ = std::fs::remove_file(&check_path);
 
     let status = Command::new("ffmpeg")
         .args([
@@ -205,18 +208,18 @@ fn ffmpeg_can_decode_our_intra_frame() {
             "-loglevel",
             "error",
             "-i",
-            "/tmp/our_output.ogv",
+            ogv_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            "/tmp/check.yuv",
+            check_path.to_str().unwrap(),
         ])
         .status()
         .expect("run ffmpeg");
     assert!(status.success(), "ffmpeg failed to decode our stream");
 
-    let decoded = std::fs::read("/tmp/check.yuv").expect("read check.yuv");
+    let decoded = std::fs::read(&check_path).expect("read check.yuv");
     let mut orig = Vec::new();
     for p in &frame.planes {
         orig.extend_from_slice(&p.data);
@@ -230,9 +233,7 @@ fn ffmpeg_can_decode_our_intra_frame() {
     );
     let pct = pixel_match(&decoded, &orig, 12);
     let pct_strict = pixel_match(&decoded, &orig, 3);
-    let file_size = std::fs::metadata("/tmp/our_output.ogv")
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = std::fs::metadata(&ogv_path).map(|m| m.len()).unwrap_or(0);
     eprintln!(
         "ffmpeg interop pixel match: {:.2}% (tol=12), {:.2}% (tol=3); Ogg {} bytes, frame {} bytes",
         pct * 100.0,
@@ -245,9 +246,9 @@ fn ffmpeg_can_decode_our_intra_frame() {
 
 // --- P-frame round-trip --------------------------------------------------
 
-/// Load all 24 frames of `/tmp/theora_p_in.yuv` (raw 64x64 yuv420p, 24 frames).
+/// Load all 24 frames of `theora_p_in.yuv` from the temp dir (raw 64x64 yuv420p, 24 frames).
 fn load_pframe_input() -> Option<Vec<VideoFrame>> {
-    let raw = std::fs::read("/tmp/theora_p_in.yuv").ok()?;
+    let raw = std::fs::read(std::env::temp_dir().join("theora_p_in.yuv")).ok()?;
     let frame_size = 64 * 64 + 2 * 32 * 32;
     if raw.len() < frame_size {
         return None;
@@ -287,7 +288,7 @@ fn load_pframe_input() -> Option<Vec<VideoFrame>> {
 #[test]
 fn encode_pframe_clip_round_trip_via_own_decoder() {
     let Some(frames) = load_pframe_input() else {
-        eprintln!("skipped: /tmp/theora_p_in.yuv missing");
+        eprintln!("skipped: theora_p_in.yuv missing from temp dir");
         return;
     };
     assert!(!frames.is_empty());
@@ -386,7 +387,7 @@ fn encode_pframe_clip_round_trip_via_own_decoder() {
 #[test]
 fn ffmpeg_can_decode_our_pframe_clip() {
     let Some(frames) = load_pframe_input() else {
-        eprintln!("skipped: /tmp/theora_p_in.yuv missing");
+        eprintln!("skipped: theora_p_in.yuv missing from temp dir");
         return;
     };
     if Command::new("ffmpeg").arg("-version").output().is_err() {
@@ -450,8 +451,11 @@ fn ffmpeg_can_decode_our_pframe_clip() {
         seq += 1;
     }
 
-    std::fs::write("/tmp/our_pframe_output.ogv", &ogg).expect("write ogg");
-    let _ = std::fs::remove_file("/tmp/theora_p_check.yuv");
+    let tmp = std::env::temp_dir();
+    let ogv_path = tmp.join("our_pframe_output.ogv");
+    let check_path = tmp.join("theora_p_check.yuv");
+    std::fs::write(&ogv_path, &ogg).expect("write ogg");
+    let _ = std::fs::remove_file(&check_path);
 
     let status = Command::new("ffmpeg")
         .args([
@@ -459,12 +463,12 @@ fn ffmpeg_can_decode_our_pframe_clip() {
             "-loglevel",
             "error",
             "-i",
-            "/tmp/our_pframe_output.ogv",
+            ogv_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            "/tmp/theora_p_check.yuv",
+            check_path.to_str().unwrap(),
         ])
         .status()
         .expect("run ffmpeg");
@@ -473,7 +477,7 @@ fn ffmpeg_can_decode_our_pframe_clip() {
         "ffmpeg failed to decode our P-frame stream"
     );
 
-    let decoded = std::fs::read("/tmp/theora_p_check.yuv").expect("read theora_p_check.yuv");
+    let decoded = std::fs::read(&check_path).expect("read theora_p_check.yuv");
     let frame_size = 64 * 64 + 2 * 32 * 32;
     let n_dec = decoded.len() / frame_size;
     let n_check = n_dec.min(frames.len());
@@ -497,9 +501,7 @@ fn ffmpeg_can_decode_our_pframe_clip() {
         eprintln!("ffmpeg-decoded frame {i}: {:.2}% match", pct * 100.0);
     }
     let overall = total_match as f64 / total_pixels as f64;
-    let file_size = std::fs::metadata("/tmp/our_pframe_output.ogv")
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = std::fs::metadata(&ogv_path).map(|m| m.len()).unwrap_or(0);
     eprintln!(
         "ffmpeg interop P-frame match: {:.2}% (tol=16); Ogg {} bytes",
         overall * 100.0,
@@ -768,8 +770,11 @@ fn pframe_moving_pattern_ffmpeg_interop() {
         seq += 1;
     }
 
-    std::fs::write("/tmp/oxideav_moving_pattern.ogv", &ogg).expect("write ogv");
-    let _ = std::fs::remove_file("/tmp/oxideav_moving_pattern_check.yuv");
+    let tmp = std::env::temp_dir();
+    let ogv_path = tmp.join("oxideav_moving_pattern.ogv");
+    let check_path = tmp.join("oxideav_moving_pattern_check.yuv");
+    std::fs::write(&ogv_path, &ogg).expect("write ogv");
+    let _ = std::fs::remove_file(&check_path);
 
     let status = std::process::Command::new("/usr/bin/ffmpeg")
         .args([
@@ -777,18 +782,18 @@ fn pframe_moving_pattern_ffmpeg_interop() {
             "-loglevel",
             "error",
             "-i",
-            "/tmp/oxideav_moving_pattern.ogv",
+            ogv_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            "/tmp/oxideav_moving_pattern_check.yuv",
+            check_path.to_str().unwrap(),
         ])
         .status()
         .expect("run ffmpeg");
     assert!(status.success(), "ffmpeg failed to decode moving pattern");
 
-    let decoded = std::fs::read("/tmp/oxideav_moving_pattern_check.yuv").expect("read yuv");
+    let decoded = std::fs::read(&check_path).expect("read yuv");
     let frame_size = 64 * 64 + 2 * 32 * 32;
     // ffmpeg output must contain the same number of frames as we emitted.
     let n_frames_out = decoded.len() / frame_size;

@@ -10,7 +10,6 @@
 //!   an ffmpeg-encoded I+P H.263 clip with our decoder and compare the
 //!   MB-type histogram against ffmpeg's output.
 
-use std::path::Path;
 use std::process::Command;
 
 use oxideav_codec::{Decoder, Encoder};
@@ -197,13 +196,23 @@ fn encode_ffmpeg_decode_i_p_sequence() {
     for p in &packets {
         bytes.extend_from_slice(&p.data);
     }
-    let es_path = "/tmp/h263_ip_ours.h263";
-    let yuv_path = "/tmp/h263_ip_check.yuv";
-    std::fs::write(es_path, &bytes).expect("write");
+    let tmp = std::env::temp_dir();
+    let es_path = tmp.join("h263_ip_ours.h263");
+    let yuv_path = tmp.join("h263_ip_check.yuv");
+    std::fs::write(&es_path, &bytes).expect("write");
 
     let status = Command::new("ffmpeg")
         .args([
-            "-y", "-f", "h263", "-i", es_path, "-f", "rawvideo", "-pix_fmt", "yuv420p", yuv_path,
+            "-y",
+            "-f",
+            "h263",
+            "-i",
+            es_path.to_str().unwrap(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            yuv_path.to_str().unwrap(),
         ])
         .status();
     let Ok(status) = status else {
@@ -214,7 +223,7 @@ fn encode_ffmpeg_decode_i_p_sequence() {
 
     // Compare frame count: check the output file is exactly 4 frames long.
     let expected_size = (W * H + 2 * (W / 2) * (H / 2)) as usize * 4;
-    let actual_size = std::fs::metadata(yuv_path).expect("stat").len() as usize;
+    let actual_size = std::fs::metadata(&yuv_path).expect("stat").len() as usize;
     assert_eq!(
         actual_size, expected_size,
         "ffmpeg decoded frame count mismatch"
@@ -332,13 +341,23 @@ fn our_stream_decoded_by_ours_vs_ffmpeg() {
     for p in &packets {
         bytes.extend_from_slice(&p.data);
     }
-    let es_path = "/tmp/h263_ip_compare.h263";
-    let yuv_path = "/tmp/h263_ip_compare.yuv";
-    std::fs::write(es_path, &bytes).expect("write");
+    let tmp = std::env::temp_dir();
+    let es_path = tmp.join("h263_ip_compare.h263");
+    let yuv_path = tmp.join("h263_ip_compare.yuv");
+    std::fs::write(&es_path, &bytes).expect("write");
 
     let status = Command::new("ffmpeg")
         .args([
-            "-y", "-f", "h263", "-i", es_path, "-f", "rawvideo", "-pix_fmt", "yuv420p", yuv_path,
+            "-y",
+            "-f",
+            "h263",
+            "-i",
+            es_path.to_str().unwrap(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            yuv_path.to_str().unwrap(),
         ])
         .status();
     let Ok(status) = status else {
@@ -347,7 +366,7 @@ fn our_stream_decoded_by_ours_vs_ffmpeg() {
     };
     assert!(status.success(), "ffmpeg rejected our I+P stream");
 
-    let ff_yuv = std::fs::read(yuv_path).expect("read");
+    let ff_yuv = std::fs::read(&yuv_path).expect("read");
     let frame_size = (W * H + 2 * (W / 2) * (H / 2)) as usize;
     assert_eq!(ff_yuv.len(), frame_size * frames.len());
 
@@ -449,12 +468,12 @@ fn our_stream_decoded_by_ours_vs_ffmpeg() {
 /// ```
 #[test]
 fn decode_ffmpeg_i_p_clip() {
-    let path = "/tmp/h263_ip_clip.es";
-    if !Path::new(path).exists() {
-        eprintln!("fixture {path} missing — skipping");
+    let path = std::env::temp_dir().join("h263_ip_clip.es");
+    if !path.exists() {
+        eprintln!("fixture {} missing — skipping", path.display());
         return;
     }
-    let es = std::fs::read(path).expect("read");
+    let es = std::fs::read(&path).expect("read");
     let mut dec = H263Decoder::new(CodecId::new(oxideav_h263::CODEC_ID_STR));
     dec.send_packet(&Packet::new(0, TimeBase::new(1, 10), es))
         .expect("send");

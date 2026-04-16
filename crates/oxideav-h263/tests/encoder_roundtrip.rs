@@ -14,7 +14,6 @@
 //! stream to /tmp/h263_ours.h263 and decode it with `ffmpeg -f h263`,
 //! comparing against the source. Acceptance bar: ≥ 95 % match (lossy).
 
-use std::path::Path;
 use std::process::Command;
 
 use oxideav_codec::{Decoder, Encoder};
@@ -28,9 +27,9 @@ use oxideav_h263::encoder::make_encoder;
 const W: u32 = 176;
 const H: u32 = 144;
 
-fn read_optional(path: &str) -> Option<Vec<u8>> {
-    if !Path::new(path).exists() {
-        eprintln!("fixture {path} missing — skipping test");
+fn read_optional(path: &std::path::Path) -> Option<Vec<u8>> {
+    if !path.exists() {
+        eprintln!("fixture {} missing — skipping test", path.display());
         return None;
     }
     Some(std::fs::read(path).expect("read fixture"))
@@ -194,7 +193,8 @@ fn encode_decode_smooth_ramp_self_round_trip() {
 /// row). Acceptance: ffmpeg accepts our stream.
 #[test]
 fn encode_decode_subqcif_via_ffmpeg() {
-    let Some(src_yuv) = read_optional("/tmp/h263_subqcif.yuv") else {
+    let tmp = std::env::temp_dir();
+    let Some(src_yuv) = read_optional(&tmp.join("h263_subqcif.yuv")) else {
         return;
     };
     let frame = yuv_to_frame(&src_yuv, 128, 96);
@@ -207,7 +207,9 @@ fn encode_decode_subqcif_via_ffmpeg() {
     enc.send_frame(&Frame::Video(frame)).expect("send");
     enc.flush().expect("flush");
     let pkt = enc.receive_packet().expect("receive");
-    std::fs::write("/tmp/h263_subqcif.h263", &pkt.data).expect("write");
+    let es_path = tmp.join("h263_subqcif.h263");
+    let check_path = tmp.join("h263_subqcif_check.yuv");
+    std::fs::write(&es_path, &pkt.data).expect("write");
 
     let status = Command::new("ffmpeg")
         .args([
@@ -215,12 +217,12 @@ fn encode_decode_subqcif_via_ffmpeg() {
             "-f",
             "h263",
             "-i",
-            "/tmp/h263_subqcif.h263",
+            es_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            "/tmp/h263_subqcif_check.yuv",
+            check_path.to_str().unwrap(),
         ])
         .status();
     let Ok(status) = status else {
@@ -235,7 +237,8 @@ fn encode_decode_subqcif_via_ffmpeg() {
 /// 18 GOBs of 1 MB row each for CIF specifically).
 #[test]
 fn encode_decode_cif_via_ffmpeg() {
-    let Some(src_yuv) = read_optional("/tmp/h263_cif.yuv") else {
+    let tmp = std::env::temp_dir();
+    let Some(src_yuv) = read_optional(&tmp.join("h263_cif.yuv")) else {
         return;
     };
     let frame = yuv_to_frame(&src_yuv, 352, 288);
@@ -248,7 +251,9 @@ fn encode_decode_cif_via_ffmpeg() {
     enc.send_frame(&Frame::Video(frame)).expect("send");
     enc.flush().expect("flush");
     let pkt = enc.receive_packet().expect("receive");
-    std::fs::write("/tmp/h263_cif.h263", &pkt.data).expect("write");
+    let es_path = tmp.join("h263_cif.h263");
+    let check_path = tmp.join("h263_cif_check.yuv");
+    std::fs::write(&es_path, &pkt.data).expect("write");
 
     let status = Command::new("ffmpeg")
         .args([
@@ -256,12 +261,12 @@ fn encode_decode_cif_via_ffmpeg() {
             "-f",
             "h263",
             "-i",
-            "/tmp/h263_cif.h263",
+            es_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            "/tmp/h263_cif_check.yuv",
+            check_path.to_str().unwrap(),
         ])
         .status();
     let Ok(status) = status else {
@@ -283,7 +288,8 @@ fn encode_decode_cif_via_ffmpeg() {
 /// decoded output of the same stream (≥ 99 %).
 #[test]
 fn encode_decode_qcif_via_ffmpeg() {
-    let Some(src_yuv) = read_optional("/tmp/h263_in.yuv") else {
+    let tmp = std::env::temp_dir();
+    let Some(src_yuv) = read_optional(&tmp.join("h263_in.yuv")) else {
         return;
     };
     let frame = yuv_to_frame(&src_yuv, W, H);
@@ -293,7 +299,9 @@ fn encode_decode_qcif_via_ffmpeg() {
     enc.flush().expect("flush");
     let pkt = enc.receive_packet().expect("receive");
 
-    std::fs::write("/tmp/h263_ours.h263", &pkt.data).expect("write h263");
+    let es_path = tmp.join("h263_ours.h263");
+    let check_path = tmp.join("h263_check.yuv");
+    std::fs::write(&es_path, &pkt.data).expect("write h263");
 
     // Decode the same stream with our own decoder.
     let mut dec = H263Decoder::new(CodecId::new(oxideav_h263::CODEC_ID_STR));
@@ -312,12 +320,12 @@ fn encode_decode_qcif_via_ffmpeg() {
             "-f",
             "h263",
             "-i",
-            "/tmp/h263_ours.h263",
+            es_path.to_str().unwrap(),
             "-f",
             "rawvideo",
             "-pix_fmt",
             "yuv420p",
-            "/tmp/h263_check.yuv",
+            check_path.to_str().unwrap(),
         ])
         .status();
     let status = match status {
@@ -328,7 +336,7 @@ fn encode_decode_qcif_via_ffmpeg() {
         }
     };
     assert!(status.success(), "ffmpeg failed to decode our stream");
-    let ff_yuv = std::fs::read("/tmp/h263_check.yuv").expect("read ffmpeg out");
+    let ff_yuv = std::fs::read(&check_path).expect("read ffmpeg out");
 
     // Spec-compliance check: our decoder and ffmpeg must agree on the
     // reconstruction of our bitstream.
