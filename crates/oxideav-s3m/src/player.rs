@@ -33,9 +33,16 @@ pub mod cmd {
     pub const F_SLIDE_UP: u8 = 6;
     pub const G_TONE_PORTA: u8 = 7;
     pub const H_VIBRATO: u8 = 8;
+    pub const J_ARPEGGIO: u8 = 10;
+    pub const K_VIB_VOL: u8 = 11;
+    pub const L_PORT_VOL: u8 = 12;
     pub const O_SAMPLE_OFFSET: u8 = 15;
+    pub const Q_RETRIGGER: u8 = 17;
+    pub const R_TREMOLO: u8 = 18;
+    pub const S_EXTENDED: u8 = 19;
     pub const T_SET_TEMPO: u8 = 20;
     pub const V_GLOBAL_VOL: u8 = 22;
+    pub const X_SET_PAN: u8 = 24;
 }
 
 /// Per-channel playback state.
@@ -61,6 +68,11 @@ pub struct Channel {
     pub info: u8,
     /// Vibrato phase in table units (0..=63).
     pub vibrato_pos: u8,
+    /// Tremolo phase in table units (0..=63).
+    pub tremolo_pos: u8,
+    /// Last note byte triggered on this channel — needed for arpeggio
+    /// and retrigger to recompute the base frequency.
+    pub last_note: u8,
 }
 
 impl Default for Channel {
@@ -76,6 +88,8 @@ impl Default for Channel {
             command: 0,
             info: 0,
             vibrato_pos: 0,
+            tremolo_pos: 0,
+            last_note: 0,
         }
     }
 }
@@ -272,6 +286,8 @@ impl PlayerState {
                         }
                         ch.active = true;
                         ch.vibrato_pos = 0;
+                        ch.tremolo_pos = 0;
+                        ch.last_note = cell.note;
                     }
                 }
             }
@@ -310,6 +326,22 @@ impl PlayerState {
                 cmd::V_GLOBAL_VOL => {
                     row_global_vol = Some(ch.info.min(64));
                 }
+                cmd::S_EXTENDED => {
+                    // Sxy: extended commands. Subcommand in high nibble.
+                    // Today only S8x (set pan) lands on tick 0 — SCx/SDx/SBx
+                    // (note cut/delay/pattern loop) are TODO.
+                    let sub = ch.info >> 4;
+                    let p = ch.info & 0x0F;
+                    if sub == 0x8 {
+                        ch.pan = p;
+                    }
+                }
+                cmd::X_SET_PAN => {
+                    // Xxx: set absolute pan (0..0x80, 0=left, 0x80=right).
+                    // Map to our 0..15 internal scale.
+                    let pan15 = (ch.info as u16 * 15 / 0x80).min(15) as u8;
+                    ch.pan = pan15;
+                }
                 _ => {}
             }
         }
@@ -329,22 +361,91 @@ impl PlayerState {
     }
 
     fn apply_per_tick(&mut self) {
+        let tick = self.tick;
         for ch in &mut self.channels {
             let x = ch.info >> 4;
             let y = ch.info & 0x0F;
             match ch.command {
-                cmd::D_VOL_SLIDE => {
-                    // Dxy: volume slide. Fine slides (Dx0 where x=0xF or
-                    // D0y where y=0xF) happen on tick 0 only and are
-                    // skipped here; normal slides happen on tick > 0.
-                    if x == 0xF || y == 0xF {
-                        // Fine slide — ignore per-tick (TODO: tick-0 fine).
-                    } else if x != 0 && y == 0 {
-                        ch.volume = (ch.volume as u16 + x as u16).min(64) as u8;
-                    } else if y != 0 && x == 0 {
-                        ch.volume = ch.volume.saturating_sub(y);
+                cmd::J_ARPEGGIO => {
+                    // Jxy: cycle through note, note+x semitones, note+y
+                    // semitones across consecutive ticks (0, 1, 2, 0, 1, 2…).
+                    if (x | y) != 0 && ch.last_note != 0 {
+                        let semis = match tick % 3 {
+                            0 => 0,
+                            1 => x as i32,
+                            _ => y as i32,
+                        };
+                        let mult = 2.0f32.powf(semis as f32 / 12.0);
+                        ch.frequency = ch.target_frequency * mult;
                     }
                 }
+                cmd::K_VIB_VOL => {
+                    // Kxy: vibrato (uses last H params? — ST3 uses current
+                    // params; treat as H + D combination this tick).
+                    if ch.target_frequency > 0.0 {
+                        ch.vibrato_pos = (ch.vibrato_pos.wrapping_add(4)) & 0x3F;
+                        let delta = vibrato_sine(ch.vibrato_pos);
+                        let mult = 2.0f32.powf(delta as f32 / 768.0);
+                        ch.frequency = ch.target_frequency * mult;
+                    }
+                    Self::apply_dxy(ch, x, y);
+                }
+                cmd::L_PORT_VOL => {
+                    // Lxy: tone porta + vol slide. Use last G step? — we
+                    // approximate with a fixed slide of 1 toward target.
+                    if ch.target_frequency > 0.0 && ch.frequency != ch.target_frequency {
+                        let f = if ch.frequency < ch.target_frequency {
+                            2.0f32.powf(1.0 / 768.0)
+                        } else {
+                            2.0f32.powf(-1.0 / 768.0)
+                        };
+                        let new_f = ch.frequency * f;
+                        ch.frequency = if (new_f - ch.target_frequency).abs()
+                            < (ch.frequency - ch.target_frequency).abs()
+                        {
+                            new_f
+                        } else {
+                            ch.target_frequency
+                        };
+                    }
+                    Self::apply_dxy(ch, x, y);
+                }
+                cmd::Q_RETRIGGER => {
+                    // Qxy: retrigger every y ticks; x = volume change code.
+                    if y != 0 && (tick % y) == 0 && tick > 0 {
+                        ch.sample_pos = 0.0;
+                        // Volume modifier x (subset implemented):
+                        match x {
+                            0x1 => ch.volume = ch.volume.saturating_sub(1),
+                            0x2 => ch.volume = ch.volume.saturating_sub(2),
+                            0x3 => ch.volume = ch.volume.saturating_sub(4),
+                            0x4 => ch.volume = ch.volume.saturating_sub(8),
+                            0x5 => ch.volume = ch.volume.saturating_sub(16),
+                            0x6 => ch.volume = (ch.volume * 2 / 3).min(64),
+                            0x7 => ch.volume /= 2,
+                            0x9 => ch.volume = (ch.volume + 1).min(64),
+                            0xA => ch.volume = (ch.volume + 2).min(64),
+                            0xB => ch.volume = (ch.volume + 4).min(64),
+                            0xC => ch.volume = (ch.volume + 8).min(64),
+                            0xD => ch.volume = (ch.volume + 16).min(64),
+                            0xE => ch.volume = ((ch.volume as u16) * 3 / 2).min(64) as u8,
+                            0xF => ch.volume = (ch.volume * 2).min(64),
+                            _ => {}
+                        }
+                    }
+                }
+                cmd::R_TREMOLO => {
+                    // Rxy: like vibrato but applied to volume.
+                    let speed = x;
+                    let depth = y;
+                    if speed != 0 || depth != 0 {
+                        ch.tremolo_pos = (ch.tremolo_pos.wrapping_add(speed * 4)) & 0x3F;
+                        let delta = (vibrato_sine(ch.tremolo_pos) * depth as i32) / 64;
+                        let v = (ch.volume as i32 + delta).clamp(0, 64);
+                        ch.volume = v as u8;
+                    }
+                }
+                cmd::D_VOL_SLIDE => Self::apply_dxy(ch, x, y),
                 cmd::E_SLIDE_DOWN => {
                     // Exx: portamento down. Each tick: freq *= 2^(-param/768).
                     // Fine / extra-fine slides (0xEy / 0xFy) are tick-0 only
@@ -390,6 +491,19 @@ impl PlayerState {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Dxy volume slide step (per-tick path). Fine slides (Dx0 where
+    /// x=0xF, or D0y where y=0xF) are tick-0 only and intentionally
+    /// no-op here.
+    fn apply_dxy(ch: &mut Channel, x: u8, y: u8) {
+        if x == 0xF || y == 0xF {
+            // Fine — tick-0 only.
+        } else if x != 0 && y == 0 {
+            ch.volume = (ch.volume as u16 + x as u16).min(64) as u8;
+        } else if y != 0 && x == 0 {
+            ch.volume = ch.volume.saturating_sub(y);
         }
     }
 
@@ -492,14 +606,15 @@ impl PlayerState {
             r += cr;
         }
         // Mix-down gain. ST3's nominal master_volume is 48 (out of 127);
-        // libxmp/openmpt scale that into a constant ~2.0 boost since 48
-        // is the "neutral" setting. We follow the same convention:
-        //   total_gain = (master_volume / 48) * (global_volume / 64)
-        // and divide by the count of *active* channels (not all 32 slots
-        // — that would attenuate typical 4–8 channel songs by 8 dB+).
+        // libxmp/openmpt treat that as the "neutral" setting and so do
+        // we. Channel-count compensation uses sqrt rather than linear
+        // division — typical S3M content has only a few channels at
+        // their peak simultaneously, so dividing by N (instead of √N)
+        // crushes the perceived loudness by ~6-12 dB on big modules.
+        // Final clamp catches the rare actual peak.
         let mv = (self.master_volume.max(1) as f32) / 48.0;
         let gv = (self.global_volume as f32) / 64.0;
-        let norm = (self.active_channels as f32).max(1.0);
+        let norm = (self.active_channels as f32).max(1.0).sqrt();
         let scale = mv * gv / norm;
         l = (l * scale).clamp(-1.0, 1.0);
         r = (r * scale).clamp(-1.0, 1.0);
