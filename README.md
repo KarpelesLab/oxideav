@@ -30,7 +30,7 @@ oxideav/
 │   │
 │   ├── oxideav-ogg/          # Ogg container (RFC 3533): pages, packets, CRC32.
 │   │                         #   Codec-agnostic transport layer.
-│   ├── oxideav-vorbis/       # Vorbis audio codec (currently: id parser; decoder TBD)
+│   ├── oxideav-vorbis/       # Vorbis audio codec (decoder + encoder)
 │   ├── oxideav-flac/         # FLAC native container + decoder + encoder
 │   ├── oxideav-opus/         # Opus codec (header parsing; decoder TBD)
 │   ├── oxideav-mkv/          # Matroska / WebM container (EBML), demux + mux
@@ -76,29 +76,32 @@ If a format grows beyond that — multiple profiles, complex bitstream parsing, 
 
 ## Current status
 
-Probe / remux / **decode** / transcode end-to-end for FLAC and PCM/WAV. Pure-
-Rust FLAC decoder verified bit-exact against the reference encoder for 16-bit
-mono, 16-bit stereo with channel decorrelation, and 24-bit stereo (decoded
-audio MD5 matches both ffmpeg and the original PCM the FLACs were encoded
-from).
+Containers (probe / demux / mux): WAV, FLAC native, Ogg, Matroska, MP4
+(demux only), IFF. Cross-container remux works for any pair whose
+codecs don't require rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 → FLAC/MKV).
 
-| Format        | Container                 | Codec                | Probe | Remux | Decode | Encode |
-|---------------|---------------------------|----------------------|:-----:|:-----:|:------:|:------:|
-| PCM in WAV    | `oxideav-basic` (wav)     | `oxideav-basic` (pcm)|  ✅   |  ✅   |   ✅   |   ✅   |
-| FLAC native   | `oxideav-flac`            | `oxideav-flac`       |  ✅   |  ✅   |   ✅   |   ✅   |
-| Ogg Vorbis    | `oxideav-ogg`             | `oxideav-vorbis`     |  ✅   |  ✅   |        |        |
-| Ogg Opus      | `oxideav-ogg`             | `oxideav-opus`       |  ✅   |  ✅   |        |        |
-| Matroska      | `oxideav-mkv` (FLAC/Opus/Vorbis/PCM) | (via codec crate) |  ✅   |  ✅   |   ✅\*  |        |
-| MP4/M4A       | `oxideav-mp4` (FLAC/ALAC/AAC/Opus/H264/...) | (via codec crate) |  ✅   |  ✅\*\* |  ✅\*  |        |
+**Codecs**:
 
-\* When combined with a codec whose decoder is implemented (FLAC today).
+| Codec           | Decode                         | Encode                   |
+|-----------------|--------------------------------|--------------------------|
+| PCM (s8/16/24/32/f32) | ✅ all variants          | ✅ all variants          |
+| FLAC            | ✅ bit-exact vs reference      | ✅ bit-exact vs reference |
+| Vorbis          | ✅ matches lewton/ffmpeg        | ✅ real audio (tier 1)   |
+| Opus            | header parsing only            | —                        |
+| MOD (ProTracker)| ✅ 4-ch Paula mixer + effects  | —                        |
+| 8SVX (Amiga IFF)| ✅                             | —                        |
+| MP1/MP2/MP3     | header only (scaffold)         | —                        |
+| AAC-LC          | header only (scaffold)         | —                        |
+| CELT            | range decoder only (scaffold)  | —                        |
+| Speex           | header parser (scaffold)       | —                        |
+| GSM 06.10       | ✅ full RPE-LTP                | —                        |
+| G.723.1 / G.728 / G.729 | scaffolds              | —                        |
 
-\*\* MP4 demuxing is implemented; MP4 muxing is deferred (requires sample-table
-buffering or a two-pass write).
-
-Cross-container remux works: FLAC ↔ MKV, Ogg ↔ MKV, MP4 → FLAC/MKV with
-decoded-audio MD5 preserved for FLAC and Vorbis. Opus→MKV produces a
-playable stream with a minor end-trim discrepancy still being tracked.
+The Vorbis decoder passes bit-exact roundtrips against lewton and
+matches ffmpeg's output within float rounding. The Vorbis encoder
+emits recognisable audio today (sine-wave Goertzel ratio ~32× at
+target freq vs noise) with rough quality; a multi-session effort to
+reach libvorbis-quality parity is ongoing.
 
 CLI verbs: `list`, `probe`, `remux`, `transcode`. Example:
 
@@ -112,17 +115,18 @@ Transcoded song.flac → song.wav (pcm_s16le): 482 pkts in, 482 frames decoded, 
 1. ✅ Workspace, core types, codec/container traits
 2. ✅ `oxideav-basic`: WAV container + PCM codec
 3. ✅ `oxideav` aggregator + CLI (`list`, `probe`, `remux`, `transcode`)
-4. ✅ Pipeline composition: passthrough remux + single-stream transcode
+4. ✅ Source/sink pipeline with per-stream routing and copy-or-transcode decisions
 5. ✅ Ogg container with byte-faithful page boundary preservation
 6. ✅ FLAC native container + codec (decode + encode, both bit-exact)
-7. ✅ Vorbis + Opus identification headers (probe + remux today)
-8. Vorbis decoder — **in progress** (bit reader, codebooks, setup header
-   parsing all done and verified against real files; floor + residue
-   decode + IMDCT next)
-9. Opus decoder (SILK + CELT, RFC 6716) — major project
-10. Filters: resample, sample-format conversion, pixel-format conversion, scale
-11. Multi-stream transcode + filter graph
-12. Expand catalog: MP4/MKV containers, AAC, more video, …
+7. ✅ Matroska demux + mux; MP4 demux
+8. ✅ Vorbis decoder + initial encoder
+9. ✅ Amiga IFF + 8SVX + ProTracker MOD playback
+10. Vorbis encoder — **in progress** toward libvorbis-quality parity
+   (long+short blocks, stereo, wider residue VQ, then psy floor)
+11. Opus decoder (SILK + CELT, RFC 6716) — major project
+12. MP3 / AAC-LC full decoders (scaffolds today)
+13. Filters: resample, sample-format conversion, pixel-format conversion, scale
+14. Video codecs (start with an existing simple format, not H.264)
 
 ## Building
 
