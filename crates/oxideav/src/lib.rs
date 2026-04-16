@@ -16,6 +16,8 @@ pub use oxideav_pipeline as pipeline;
 
 #[cfg(feature = "aac")]
 pub use oxideav_aac as aac;
+#[cfg(feature = "avi")]
+pub use oxideav_avi as avi;
 #[cfg(feature = "basic")]
 pub use oxideav_basic as basic;
 #[cfg(feature = "celt")]
@@ -100,6 +102,10 @@ impl Registries {
         #[cfg(feature = "mp4")]
         {
             oxideav_mp4::register(&mut containers);
+        }
+        #[cfg(feature = "avi")]
+        {
+            oxideav_avi::register(&mut containers);
         }
         #[cfg(feature = "iff")]
         {

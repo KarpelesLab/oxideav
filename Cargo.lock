@@ -121,6 +121,7 @@ name = "oxideav"
 version = "0.0.1"
 dependencies = [
  "oxideav-aac",
+ "oxideav-avi",
  "oxideav-basic",
  "oxideav-celt",
  "oxideav-codec",
@@ -153,6 +154,15 @@ version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-avi"
+version = "0.0.1"
+dependencies = [
+ "oxideav-container",
+ "oxideav-core",
+ "oxideav-mjpeg",
 ]
 
 [[package]]

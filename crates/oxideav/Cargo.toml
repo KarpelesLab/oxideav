@@ -17,6 +17,7 @@ default = [
     "flac",
     "mkv",
     "mp4",
+    "avi",
     "iff",
     "amiga_mod",
     "mp1",
@@ -39,6 +40,7 @@ opus = ["dep:oxideav-opus"]
 flac = ["dep:oxideav-flac"]
 mkv = ["dep:oxideav-mkv"]
 mp4 = ["dep:oxideav-mp4"]
+avi = ["dep:oxideav-avi"]
 iff = ["dep:oxideav-iff"]
 amiga_mod = ["dep:oxideav-mod"]
 mp1 = ["dep:oxideav-mp1"]
@@ -66,6 +68,7 @@ oxideav-opus = { workspace = true, optional = true }
 oxideav-flac = { workspace = true, optional = true }
 oxideav-mkv = { workspace = true, optional = true }
 oxideav-mp4 = { workspace = true, optional = true }
+oxideav-avi = { workspace = true, optional = true }
 oxideav-iff = { workspace = true, optional = true }
 oxideav-mod = { workspace = true, optional = true }
 oxideav-mp1 = { workspace = true, optional = true }

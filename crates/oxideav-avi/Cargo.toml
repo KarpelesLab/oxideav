@@ -1,0 +1,16 @@
+[package]
+name = "oxideav-avi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure-Rust AVI (RIFF) container for oxideav"
+
+[dependencies]
+oxideav-core = { workspace = true }
+oxideav-container = { workspace = true }
+
+[dev-dependencies]
+oxideav-mjpeg = { workspace = true }
