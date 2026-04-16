@@ -22,7 +22,7 @@
 //! * Interlaced field coding, scalability, data partitioning, reversible
 //!   VLCs.
 //! * MPEG-4 Studio / AVC Simple profiles.
-//! * Encoder.
+//! * Encoder: I-VOPs only — P / B / S VOPs are out of scope (§6.2.5).
 //!
 //! The crate has no runtime dependencies beyond `oxideav-core` and
 //! `oxideav-codec`.
@@ -31,8 +31,10 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod bitreader;
+pub mod bitwriter;
 pub mod block;
 pub mod decoder;
+pub mod encoder;
 pub mod headers;
 pub mod inter;
 pub mod iq;
@@ -51,11 +53,15 @@ use oxideav_core::{CodecCapabilities, CodecId};
 /// `XVID`, `DIVX`, `DX50`, `MP4V`, `FMP4` are all this codec.
 pub const CODEC_ID_STR: &str = "mpeg4video";
 
-/// Register this decoder with a codec registry.
+/// Register this codec's decoder + I-VOP encoder with a registry.
 pub fn register(reg: &mut CodecRegistry) {
     let caps = CodecCapabilities::video("mpeg4video_sw")
         .with_lossy(true)
         .with_intra_only(false)
         .with_max_size(4096, 4096);
-    reg.register_decoder_impl(CodecId::new(CODEC_ID_STR), caps, decoder::make_decoder);
+    let id = CodecId::new(CODEC_ID_STR);
+    reg.register_decoder_impl(id.clone(), caps.clone(), decoder::make_decoder);
+    // Encoder produces I-VOPs only — flag intra_only = true to advertise.
+    let enc_caps = caps.with_intra_only(true);
+    reg.register_encoder_impl(id, enc_caps, encoder::make_encoder);
 }
