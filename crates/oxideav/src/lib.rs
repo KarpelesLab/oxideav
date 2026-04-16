@@ -32,6 +32,8 @@ pub use oxideav_g729 as g729;
 pub use oxideav_gsm as gsm;
 #[cfg(feature = "iff")]
 pub use oxideav_iff as iff;
+#[cfg(feature = "mjpeg")]
+pub use oxideav_mjpeg as mjpeg;
 #[cfg(feature = "mkv")]
 pub use oxideav_mkv as mkv;
 #[cfg(feature = "amiga_mod")]
@@ -117,6 +119,10 @@ impl Registries {
         #[cfg(feature = "mp3")]
         {
             oxideav_mp3::register(&mut codecs);
+        }
+        #[cfg(feature = "mjpeg")]
+        {
+            oxideav_mjpeg::register(&mut codecs);
         }
         #[cfg(feature = "aac")]
         {

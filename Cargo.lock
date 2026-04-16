@@ -132,6 +132,7 @@ dependencies = [
  "oxideav-g729",
  "oxideav-gsm",
  "oxideav-iff",
+ "oxideav-mjpeg",
  "oxideav-mkv",
  "oxideav-mod",
  "oxideav-mp1",
@@ -246,6 +247,14 @@ version = "0.0.1"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mjpeg"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
  "oxideav-core",
 ]
 

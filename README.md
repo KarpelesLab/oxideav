@@ -97,6 +97,7 @@ Ogg ↔ MKV, MP4 → FLAC/MKV, FLAC/PCM → MP4).
 | Speex           | header parser (scaffold)       | —                        |
 | GSM 06.10       | ✅ full RPE-LTP                | —                        |
 | G.723.1 / G.728 / G.729 | scaffolds              | —                        |
+| **MJPEG (video)** | ✅ baseline 4:2:0/4:2:2/4:4:4/grey | ✅ baseline 4:2:0/4:2:2/4:4:4 |
 
 The Vorbis decoder passes bit-exact roundtrips against lewton and
 matches ffmpeg's output within float rounding. The Vorbis encoder
@@ -127,7 +128,8 @@ Transcoded song.flac → song.wav (pcm_s16le): 482 pkts in, 482 frames decoded, 
 11. Opus decoder (SILK + CELT, RFC 6716) — major project
 12. MP3 / AAC-LC full decoders (scaffolds today)
 13. Filters: resample, sample-format conversion, pixel-format conversion, scale
-14. Video codecs (start with an existing simple format, not H.264)
+14. ✅ First video codec: MJPEG (baseline JPEG decode + encode)
+15. Video codecs: MPEG-1 / FFV1 / VP8 next
 
 ## Building
 
