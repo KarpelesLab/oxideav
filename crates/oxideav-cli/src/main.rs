@@ -146,8 +146,17 @@ fn cmd_probe(reg: &Registries, input: &Path) -> oxideav::core::Result<()> {
     println!("Input: {}", input.display());
     println!("Format: {}", demuxer.format_name());
 
-    // Metadata block — ffprobe-style key/value listing.
-    let md = demuxer.metadata();
+    // Metadata block — ffprobe-style key/value listing. Dedupe identical
+    // (key, value) pairs to absorb cases like ffmpeg's MKV writer that
+    // emits the same encoder string in both Info\WritingApp and a
+    // Tags\SimpleTag\ENCODER.
+    let raw_md = demuxer.metadata();
+    let mut md: Vec<(&String, &String)> = Vec::with_capacity(raw_md.len());
+    for (k, v) in raw_md {
+        if !md.iter().any(|(ek, ev)| *ek == k && *ev == v) {
+            md.push((k, v));
+        }
+    }
     if !md.is_empty() {
         println!("Metadata:");
         let key_width = md.iter().map(|(k, _)| k.len()).max().unwrap_or(0).min(20);

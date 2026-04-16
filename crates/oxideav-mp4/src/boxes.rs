@@ -123,6 +123,9 @@ pub const MDAT: [u8; 4] = fourcc("mdat");
 pub const FREE: [u8; 4] = fourcc("free");
 pub const SKIP: [u8; 4] = fourcc("skip");
 pub const UDTA: [u8; 4] = fourcc("udta");
+pub const META: [u8; 4] = fourcc("meta");
+pub const ILST: [u8; 4] = fourcc("ilst");
+pub const DATA: [u8; 4] = fourcc("data");
 
 // Handler types.
 pub const HANDLER_SOUN: [u8; 4] = fourcc("soun");

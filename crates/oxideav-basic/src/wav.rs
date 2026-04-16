@@ -37,8 +37,9 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         return Err(Error::invalid("not a RIFF/WAVE file"));
     }
 
-    // Walk chunks until we hit "data"; parse "fmt " along the way.
+    // Walk chunks until we hit "data"; parse "fmt " and "LIST" along the way.
     let mut fmt: Option<WaveFmt> = None;
+    let mut metadata: Vec<(String, String)> = Vec::new();
     let data_offset: u64;
     let data_size: u64;
     loop {
@@ -51,7 +52,14 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
                 let mut buf = vec![0u8; size as usize];
                 input.read_exact(&mut buf)?;
                 fmt = Some(parse_fmt(&buf)?);
-                // Chunks are padded to even byte boundary.
+                if size % 2 == 1 {
+                    input.seek(SeekFrom::Current(1))?;
+                }
+            }
+            b"LIST" => {
+                let mut buf = vec![0u8; size as usize];
+                input.read_exact(&mut buf)?;
+                parse_list_chunk(&buf, &mut metadata);
                 if size % 2 == 1 {
                     input.seek(SeekFrom::Current(1))?;
                 }
@@ -62,7 +70,6 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
                 break;
             }
             _ => {
-                // Skip unknown chunk.
                 let pad = size + (size % 2);
                 input.seek(SeekFrom::Current(pad as i64))?;
             }
@@ -77,6 +84,11 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let time_base = TimeBase::new(1, fmt.sample_rate as i64);
     let block_align = fmt.block_align.max(1) as u64;
     let total_samples = data_size / block_align;
+    let duration_micros: i64 = if fmt.sample_rate > 0 {
+        (total_samples as i128 * 1_000_000 / fmt.sample_rate as i128) as i64
+    } else {
+        0
+    };
 
     let mut params = CodecParameters::audio(codec_id);
     params.channels = Some(fmt.channels);
@@ -105,7 +117,61 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         block_align,
         chunk_frames: 1024,
         samples_emitted: 0,
+        metadata,
+        duration_micros,
     }))
+}
+
+/// Parse a RIFF LIST chunk body. If the list type is `INFO`, map its
+/// `IART`/`INAM`/... subchunks to standard key names (`artist`, `title`,
+/// …) and append to `out`.
+fn parse_list_chunk(buf: &[u8], out: &mut Vec<(String, String)>) {
+    if buf.len() < 4 {
+        return;
+    }
+    if &buf[0..4] != b"INFO" {
+        return;
+    }
+    let mut i = 4usize;
+    while i + 8 <= buf.len() {
+        let id: [u8; 4] = [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
+        let size = u32::from_le_bytes([buf[i + 4], buf[i + 5], buf[i + 6], buf[i + 7]]) as usize;
+        i += 8;
+        if i + size > buf.len() {
+            break;
+        }
+        let raw = &buf[i..i + size];
+        let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+        let value = String::from_utf8_lossy(&raw[..end]).trim().to_string();
+        let key = info_id_to_key(&id);
+        if !value.is_empty() {
+            if let Some(k) = key {
+                out.push((k.to_string(), value));
+            }
+        }
+        i += size;
+        if size % 2 == 1 {
+            i += 1;
+        }
+    }
+}
+
+fn info_id_to_key(id: &[u8; 4]) -> Option<&'static str> {
+    match id {
+        b"INAM" => Some("title"),
+        b"IART" => Some("artist"),
+        b"IPRD" => Some("album"),
+        b"ICMT" => Some("comment"),
+        b"ICRD" => Some("date"),
+        b"IGNR" => Some("genre"),
+        b"ICOP" => Some("copyright"),
+        b"IENG" => Some("engineer"),
+        b"ITCH" => Some("technician"),
+        b"ISFT" => Some("encoder"),
+        b"ISBJ" => Some("subject"),
+        b"ITRK" => Some("track"),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +264,8 @@ struct WavDemuxer {
     block_align: u64,
     chunk_frames: u64,
     samples_emitted: i64,
+    metadata: Vec<(String, String)>,
+    duration_micros: i64,
 }
 
 impl Demuxer for WavDemuxer {
@@ -237,6 +305,18 @@ impl Demuxer for WavDemuxer {
         pkt.duration = Some(frames as i64);
         pkt.flags.keyframe = true;
         Ok(pkt)
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn duration_micros(&self) -> Option<i64> {
+        if self.duration_micros > 0 {
+            Some(self.duration_micros)
+        } else {
+            None
+        }
     }
 }
 

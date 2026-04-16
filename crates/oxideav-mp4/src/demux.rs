@@ -41,25 +41,42 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     }
     let moov = moov.ok_or_else(|| Error::invalid("MP4: missing moov box"))?;
 
-    let tracks = parse_moov(&moov)?;
-    if tracks.is_empty() {
+    let parsed = parse_moov(&moov)?;
+    if parsed.tracks.is_empty() {
         return Err(Error::invalid("MP4: no tracks"));
     }
 
-    let mut streams: Vec<StreamInfo> = Vec::with_capacity(tracks.len());
+    let mut streams: Vec<StreamInfo> = Vec::with_capacity(parsed.tracks.len());
     let mut samples: Vec<SampleRef> = Vec::new();
-    for (i, t) in tracks.iter().enumerate() {
+    for (i, t) in parsed.tracks.iter().enumerate() {
         streams.push(build_stream_info(i as u32, t));
         expand_samples(t, i as u32, &mut samples)?;
     }
     samples.sort_by_key(|s| s.offset);
+
+    // Movie duration from mvhd, translated into microseconds.
+    let duration_micros: i64 = if parsed.movie_timescale > 0 && parsed.movie_duration > 0 {
+        (parsed.movie_duration as i128 * 1_000_000 / parsed.movie_timescale as i128) as i64
+    } else {
+        0
+    };
 
     Ok(Box::new(Mp4Demuxer {
         input,
         streams,
         samples,
         cursor: 0,
+        metadata: parsed.metadata,
+        duration_micros,
     }))
+}
+
+#[derive(Default)]
+struct ParsedMoov {
+    tracks: Vec<Track>,
+    movie_timescale: u32,
+    movie_duration: u64,
+    metadata: Vec<(String, String)>,
 }
 
 /// Per-track info collected from moov.
@@ -90,8 +107,8 @@ struct Track {
     stss: Vec<u32>,
 }
 
-fn parse_moov(moov: &[u8]) -> Result<Vec<Track>> {
-    let mut out = Vec::new();
+fn parse_moov(moov: &[u8]) -> Result<ParsedMoov> {
+    let mut out = ParsedMoov::default();
     let mut cur = std::io::Cursor::new(moov);
     let end = moov.len() as u64;
     while cur.position() < end {
@@ -104,8 +121,20 @@ fn parse_moov(moov: &[u8]) -> Result<Vec<Track>> {
             TRAK => {
                 let body = read_bytes_vec(&mut cur, psz)?;
                 if let Some(t) = parse_trak(&body)? {
-                    out.push(t);
+                    out.tracks.push(t);
                 }
+            }
+            MVHD => {
+                let body = read_bytes_vec(&mut cur, psz)?;
+                parse_mvhd(&body, &mut out)?;
+            }
+            UDTA => {
+                let body = read_bytes_vec(&mut cur, psz)?;
+                parse_udta(&body, &mut out.metadata);
+            }
+            META => {
+                let body = read_bytes_vec(&mut cur, psz)?;
+                parse_meta(&body, &mut out.metadata);
             }
             _ => {
                 cur.set_position(cur.position() + psz as u64);
@@ -113,6 +142,192 @@ fn parse_moov(moov: &[u8]) -> Result<Vec<Track>> {
         }
     }
     Ok(out)
+}
+
+/// ISO/IEC 14496-12 §8.2.2 Movie Header box. Carries the movie-wide
+/// timescale and duration (in that timescale).
+fn parse_mvhd(body: &[u8], out: &mut ParsedMoov) -> Result<()> {
+    if body.is_empty() {
+        return Err(Error::invalid("MP4: mvhd empty"));
+    }
+    let version = body[0];
+    let (timescale, duration) = if version == 0 {
+        if body.len() < 20 {
+            return Err(Error::invalid("MP4: mvhd v0 too short"));
+        }
+        let ts = u32::from_be_bytes([body[12], body[13], body[14], body[15]]);
+        let du = u32::from_be_bytes([body[16], body[17], body[18], body[19]]) as u64;
+        (ts, du)
+    } else {
+        if body.len() < 32 {
+            return Err(Error::invalid("MP4: mvhd v1 too short"));
+        }
+        let ts = u32::from_be_bytes([body[20], body[21], body[22], body[23]]);
+        let du = u64::from_be_bytes([
+            body[24], body[25], body[26], body[27], body[28], body[29], body[30], body[31],
+        ]);
+        (ts, du)
+    };
+    out.movie_timescale = timescale;
+    out.movie_duration = duration;
+    Ok(())
+}
+
+/// Parse a `udta` box body. May contain 3GPP-style boxes (titl/auth/cprt/…)
+/// and/or an iTunes-style `meta` subtree.
+fn parse_udta(body: &[u8], metadata: &mut Vec<(String, String)>) {
+    let mut cur = std::io::Cursor::new(body);
+    let end = body.len() as u64;
+    while cur.position() < end {
+        let hdr = match read_box_header(&mut cur).ok().flatten() {
+            Some(h) => h,
+            None => break,
+        };
+        let psz = hdr.payload_size().unwrap_or(0) as usize;
+        if cur.position() as usize + psz > body.len() {
+            break;
+        }
+        let start = cur.position() as usize;
+        cur.set_position((start + psz) as u64);
+        let payload = &body[start..start + psz];
+        match &hdr.fourcc {
+            b"meta" => parse_meta(payload, metadata),
+            // 3GPP TS 26.244: titl / auth / cprt / dscp — body is a
+            // FullBox (1 version + 3 flags) then 2-byte language code
+            // then UTF-8 (or UTF-16 if BOM) string.
+            b"titl" | b"auth" | b"cprt" | b"dscp" | b"gnre" | b"albm" | b"yrrc" => {
+                if payload.len() >= 6 {
+                    let key = match &hdr.fourcc {
+                        b"titl" => "title",
+                        b"auth" => "artist",
+                        b"cprt" => "copyright",
+                        b"dscp" => "description",
+                        b"gnre" => "genre",
+                        b"albm" => "album",
+                        b"yrrc" => "date",
+                        _ => unreachable!(),
+                    };
+                    let s = decode_utf8_or_utf16(&payload[6..]);
+                    if !s.is_empty() {
+                        metadata.push((key.into(), s));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Parse a `meta` box body (iTunes-style or ISO-BMFF). The body is a
+/// FullBox (4 bytes of version/flags), then a series of child boxes
+/// including `hdlr` (identifies the scheme) and `ilst` (the item list).
+fn parse_meta(body: &[u8], metadata: &mut Vec<(String, String)>) {
+    if body.len() < 4 {
+        return;
+    }
+    // First 4 bytes are version/flags (FullBox header); skip them.
+    let mut cur = std::io::Cursor::new(&body[4..]);
+    let end = body.len() as u64 - 4;
+    while cur.position() < end {
+        let hdr = match read_box_header(&mut cur).ok().flatten() {
+            Some(h) => h,
+            None => break,
+        };
+        let psz = hdr.payload_size().unwrap_or(0) as usize;
+        let start = cur.position() as usize;
+        if start + psz > (body.len() - 4) {
+            break;
+        }
+        cur.set_position((start + psz) as u64);
+        if hdr.fourcc == ILST {
+            parse_ilst(&body[4 + start..4 + start + psz], metadata);
+        }
+    }
+}
+
+/// Parse an `ilst` (iTunes-style item list). Each child is a FourCC-keyed
+/// box whose payload contains a `data` subbox with the value.
+fn parse_ilst(body: &[u8], metadata: &mut Vec<(String, String)>) {
+    let mut cur = std::io::Cursor::new(body);
+    let end = body.len() as u64;
+    while cur.position() < end {
+        let hdr = match read_box_header(&mut cur).ok().flatten() {
+            Some(h) => h,
+            None => break,
+        };
+        let psz = hdr.payload_size().unwrap_or(0) as usize;
+        let start = cur.position() as usize;
+        if start + psz > body.len() {
+            break;
+        }
+        cur.set_position((start + psz) as u64);
+        // Recurse one level: look for a `data` child.
+        let item = &body[start..start + psz];
+        let key = ilst_key_for(&hdr.fourcc);
+        if key.is_none() {
+            continue;
+        }
+        let key = key.unwrap();
+        let mut sub = std::io::Cursor::new(item);
+        let sub_end = item.len() as u64;
+        while sub.position() < sub_end {
+            let sh = match read_box_header(&mut sub).ok().flatten() {
+                Some(h) => h,
+                None => break,
+            };
+            let sub_psz = sh.payload_size().unwrap_or(0) as usize;
+            let sub_start = sub.position() as usize;
+            if sub_start + sub_psz > item.len() {
+                break;
+            }
+            sub.set_position((sub_start + sub_psz) as u64);
+            if sh.fourcc == DATA {
+                // data box: 4 bytes type_indicator + 4 bytes locale + payload.
+                let data_body = &item[sub_start..sub_start + sub_psz];
+                if data_body.len() > 8 {
+                    let value = String::from_utf8_lossy(&data_body[8..]).trim().to_string();
+                    if !value.is_empty() {
+                        metadata.push((key.into(), value));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn ilst_key_for(fourcc: &[u8; 4]) -> Option<&'static str> {
+    // The iTunes atoms starting with 0xA9 are the "copyright symbol" keys.
+    match fourcc {
+        b"\xa9nam" => Some("title"),
+        b"\xa9ART" => Some("artist"),
+        b"\xa9alb" => Some("album"),
+        b"\xa9cmt" => Some("comment"),
+        b"\xa9gen" => Some("genre"),
+        b"\xa9day" => Some("date"),
+        b"\xa9wrt" => Some("composer"),
+        b"\xa9too" => Some("encoder"),
+        b"\xa9cpy" | b"cprt" => Some("copyright"),
+        b"\xa9lyr" => Some("lyrics"),
+        b"aART" => Some("album_artist"),
+        b"trkn" => Some("track"),
+        b"disk" => Some("disc"),
+        b"desc" => Some("description"),
+        _ => None,
+    }
+}
+
+fn decode_utf8_or_utf16(buf: &[u8]) -> String {
+    if buf.len() >= 2 && buf[0] == 0xFE && buf[1] == 0xFF {
+        // UTF-16BE with BOM.
+        let pairs = buf[2..].chunks_exact(2);
+        let units: Vec<u16> = pairs.map(|p| u16::from_be_bytes([p[0], p[1]])).collect();
+        return String::from_utf16_lossy(&units)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).trim().to_string()
 }
 
 fn parse_trak(body: &[u8]) -> Result<Option<Track>> {
@@ -701,6 +916,8 @@ struct Mp4Demuxer {
     streams: Vec<StreamInfo>,
     samples: Vec<SampleRef>,
     cursor: usize,
+    metadata: Vec<(String, String)>,
+    duration_micros: i64,
 }
 
 impl Demuxer for Mp4Demuxer {
@@ -770,6 +987,18 @@ impl Demuxer for Mp4Demuxer {
         })?;
         self.cursor = cursor;
         Ok(best_pts)
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn duration_micros(&self) -> Option<i64> {
+        if self.duration_micros > 0 {
+            Some(self.duration_micros)
+        } else {
+            None
+        }
     }
 }
 

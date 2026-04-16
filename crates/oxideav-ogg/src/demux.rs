@@ -17,6 +17,8 @@ pub fn open(input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     state.read_bos_section()?;
     state.read_until_headers_collected()?;
     state.populate_extradata();
+    state.populate_metadata();
+    state.populate_duration();
     Ok(Box::new(state))
 }
 
@@ -45,6 +47,8 @@ struct OggDemuxer {
     out_queue: std::collections::VecDeque<Packet>,
     /// True once we've read past the BOS section and into the data pages.
     eof_reached: bool,
+    metadata: Vec<(String, String)>,
+    duration_micros: i64,
 }
 
 impl OggDemuxer {
@@ -56,6 +60,8 @@ impl OggDemuxer {
             page_queue: std::collections::VecDeque::new(),
             out_queue: std::collections::VecDeque::new(),
             eof_reached: false,
+            metadata: Vec::new(),
+            duration_micros: 0,
         }
     }
 
@@ -200,6 +206,112 @@ impl OggDemuxer {
         }
     }
 
+    /// Pull the Vorbis-comment block out of whichever stream carries it
+    /// (Vorbis packet #2, Opus packet #2, Theora packet #2) and expose it
+    /// as container metadata.
+    fn populate_metadata(&mut self) {
+        for state in self.state_by_serial.values() {
+            let codec_id = self.streams[state.public_index].params.codec_id.clone();
+            let packets = &state.header_packets;
+            match codec_id.as_str() {
+                "vorbis" if packets.len() >= 2 => {
+                    // 2nd packet starts with 0x03 "vorbis" (7 bytes) then the comment body.
+                    let p = &packets[1];
+                    if p.len() > 7 && &p[1..7] == b"vorbis" {
+                        parse_vorbis_comment(&p[7..], &mut self.metadata);
+                    }
+                }
+                "opus" if packets.len() >= 2 => {
+                    // 2nd packet is OpusTags: 8-byte "OpusTags" magic, then the comment body.
+                    let p = &packets[1];
+                    if p.len() > 8 && &p[..8] == b"OpusTags" {
+                        parse_vorbis_comment(&p[8..], &mut self.metadata);
+                    }
+                }
+                "theora" if packets.len() >= 2 => {
+                    // 2nd packet: 0x81 "theora" (7 bytes) then comment body.
+                    let p = &packets[1];
+                    if p.len() > 7 && &p[1..7] == b"theora" {
+                        parse_vorbis_comment(&p[7..], &mut self.metadata);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Seek to the end of the file and find the last page of the first
+    /// audio-or-video stream to read its granule_position, which gives
+    /// the total stream length in samples or video frames.
+    fn populate_duration(&mut self) {
+        use std::io::SeekFrom;
+        let saved_pos = match self.input.stream_position() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let end = match self.input.seek(SeekFrom::End(0)) {
+            Ok(e) => e,
+            Err(_) => {
+                let _ = self.input.seek(SeekFrom::Start(saved_pos));
+                return;
+            }
+        };
+        // Scan back up to 64 KB looking for the last 'OggS' capture pattern.
+        let scan_back = end.min(64 * 1024);
+        let start = end.saturating_sub(scan_back);
+        if self.input.seek(SeekFrom::Start(start)).is_err() {
+            return;
+        }
+        let mut buf = vec![0u8; scan_back as usize];
+        if self.input.read_exact(&mut buf).is_err() {
+            return;
+        }
+        // Find the rightmost OggS header and parse it.
+        let mut last_granule_by_serial: HashMap<u32, i64> = HashMap::new();
+        let mut i = 0usize;
+        while i + 27 <= buf.len() {
+            if &buf[i..i + 4] == b"OggS" && i + 27 + (buf[i + 26] as usize) <= buf.len() {
+                let n_segs = buf[i + 26] as usize;
+                let body_end_off = i + 27 + n_segs;
+                let data_len: usize = buf[i + 27..body_end_off].iter().map(|&v| v as usize).sum();
+                if body_end_off + data_len <= buf.len() {
+                    let granule = i64::from_le_bytes([
+                        buf[i + 6],
+                        buf[i + 7],
+                        buf[i + 8],
+                        buf[i + 9],
+                        buf[i + 10],
+                        buf[i + 11],
+                        buf[i + 12],
+                        buf[i + 13],
+                    ]);
+                    let serial =
+                        u32::from_le_bytes([buf[i + 14], buf[i + 15], buf[i + 16], buf[i + 17]]);
+                    if granule >= 0 {
+                        last_granule_by_serial.insert(serial, granule);
+                    }
+                    i = body_end_off + data_len;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        // Pick the longest duration across streams in their own time base.
+        let mut best_micros = 0i64;
+        for (serial, granule) in last_granule_by_serial {
+            let Some(st) = self.state_by_serial.get(&serial) else {
+                continue;
+            };
+            let stream = &self.streams[st.public_index];
+            let us = (stream.time_base.seconds_of(granule) * 1_000_000.0) as i64;
+            if us > best_micros {
+                best_micros = us;
+            }
+        }
+        self.duration_micros = best_micros;
+        let _ = self.input.seek(SeekFrom::Start(saved_pos));
+    }
+
     /// Drain the next packet from the queued pages, possibly reading more.
     fn drain_next(&mut self) -> Result<Option<Packet>> {
         loop {
@@ -298,6 +410,65 @@ impl Demuxer for OggDemuxer {
             return Ok(p);
         }
         Err(Error::Eof)
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn duration_micros(&self) -> Option<i64> {
+        if self.duration_micros > 0 {
+            Some(self.duration_micros)
+        } else {
+            None
+        }
+    }
+}
+
+/// Parse a Vorbis-comment payload. The input does NOT include any codec
+/// magic prefix — the caller must strip it first. Appends (lowercase key,
+/// value) pairs to `out`.
+fn parse_vorbis_comment(buf: &[u8], out: &mut Vec<(String, String)>) {
+    let mut i = 0usize;
+    if buf.len() < 4 {
+        return;
+    }
+    let vlen = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    i += 4;
+    if i + vlen > buf.len() {
+        return;
+    }
+    let vendor = String::from_utf8_lossy(&buf[i..i + vlen]).to_string();
+    i += vlen;
+    if !vendor.is_empty() {
+        out.push(("vendor".into(), vendor));
+    }
+    if i + 4 > buf.len() {
+        return;
+    }
+    let n = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+    i += 4;
+    for _ in 0..n {
+        if i + 4 > buf.len() {
+            break;
+        }
+        let clen = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+        i += 4;
+        if i + clen > buf.len() {
+            break;
+        }
+        let entry = &buf[i..i + clen];
+        i += clen;
+        if let Some(eq) = entry.iter().position(|&b| b == b'=') {
+            let key = String::from_utf8_lossy(&entry[..eq])
+                .to_ascii_lowercase()
+                .trim()
+                .to_string();
+            let value = String::from_utf8_lossy(&entry[eq + 1..]).trim().to_string();
+            if !key.is_empty() && !value.is_empty() {
+                out.push((key, value));
+            }
+        }
     }
 }
 

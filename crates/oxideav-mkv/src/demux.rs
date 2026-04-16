@@ -67,6 +67,7 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let mut info = SegmentInfo::default();
     let mut tracks: Vec<TrackEntry> = Vec::new();
     let mut first_cluster_offset: Option<u64> = None;
+    let mut metadata: Vec<(String, String)> = Vec::new();
 
     while input.stream_position()? < segment_data_end {
         let e = read_element_header(&mut *input)?;
@@ -79,25 +80,23 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         match e.id {
             ids::INFO => {
                 let end = body_end_known.unwrap_or(segment_data_end);
-                parse_info(&mut *input, end, &mut info)?;
+                parse_info(&mut *input, end, &mut info, &mut metadata)?;
             }
             ids::TRACKS => {
                 let end = body_end_known.unwrap_or(segment_data_end);
                 parse_tracks(&mut *input, end, &mut tracks)?;
             }
+            ids::TAGS => {
+                let end = body_end_known.unwrap_or(segment_data_end);
+                parse_tags(&mut *input, end, &mut metadata)?;
+            }
             ids::CLUSTER => {
                 if first_cluster_offset.is_none() {
-                    // Position the cluster pointer at the Cluster's own header,
-                    // not its body — the demuxer state machine re-reads the
-                    // header to discover children.
                     first_cluster_offset = Some(body_start - e.header_len as u64);
                 }
-                // Stop scanning here; per Matroska conventions Tracks/Info come
-                // before Clusters, so we have what we need.
                 input.seek(SeekFrom::Start(body_start - e.header_len as u64))?;
                 break;
             }
-            // Skip everything else: SeekHead, Cues, Attachments, Tags, etc.
             _ => {
                 if let Some(end) = body_end_known {
                     input.seek(SeekFrom::Start(end))?;
@@ -187,6 +186,14 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let cluster_pos = first_cluster_offset.ok_or_else(|| Error::invalid("MKV: no clusters"))?;
     input.seek(SeekFrom::Start(cluster_pos))?;
 
+    // Segment\Info\Duration is in Matroska timecode ticks (timecode_scale ns
+    // per tick), stored as a float. Translate to microseconds.
+    let duration_micros: i64 = if info.duration > 0.0 {
+        (info.duration * (timecode_scale_ns as f64) / 1_000.0) as i64
+    } else {
+        0
+    };
+
     Ok(Box::new(MkvDemuxer {
         input,
         streams,
@@ -195,6 +202,8 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         cluster_state: ClusterState::Idle,
         out_queue: std::collections::VecDeque::new(),
         time_base,
+        metadata,
+        duration_micros,
     }))
 }
 
@@ -217,16 +226,130 @@ struct TrackEntry {
     height: u64,
 }
 
-fn parse_info(r: &mut dyn ReadSeek, end: u64, out: &mut SegmentInfo) -> Result<()> {
+fn parse_info(
+    r: &mut dyn ReadSeek,
+    end: u64,
+    out: &mut SegmentInfo,
+    metadata: &mut Vec<(String, String)>,
+) -> Result<()> {
     while r.stream_position()? < end {
         let e = read_element_header(r)?;
         match e.id {
             ids::TIMECODE_SCALE => out.timecode_scale = read_uint(r, e.size as usize)?,
             ids::DURATION => out.duration = read_float(r, e.size as usize)?,
+            ids::TITLE => {
+                let s = read_string(r, e.size as usize)?;
+                if !s.is_empty() {
+                    metadata.push(("title".into(), s));
+                }
+            }
+            ids::MUXING_APP => {
+                let s = read_string(r, e.size as usize)?;
+                if !s.is_empty() {
+                    metadata.push(("muxer".into(), s));
+                }
+            }
+            ids::WRITING_APP => {
+                let s = read_string(r, e.size as usize)?;
+                if !s.is_empty() {
+                    metadata.push(("encoder".into(), s));
+                }
+            }
+            ids::DATE_UTC => {
+                // 8-byte signed integer: nanoseconds since 2001-01-01 00:00:00 UTC.
+                if e.size == 8 {
+                    let ns = read_uint(r, 8)? as i64;
+                    let secs_since_2001 = ns / 1_000_000_000;
+                    let unix_2001: i64 = 978_307_200;
+                    let unix = unix_2001 + secs_since_2001;
+                    metadata.push(("date".into(), format_iso8601(unix)));
+                } else {
+                    skip(r, e.size)?;
+                }
+            }
             _ => skip(r, e.size)?,
         }
     }
     Ok(())
+}
+
+fn parse_tags(r: &mut dyn ReadSeek, end: u64, metadata: &mut Vec<(String, String)>) -> Result<()> {
+    while r.stream_position()? < end {
+        let e = read_element_header(r)?;
+        match e.id {
+            ids::TAG => {
+                let tag_end = r.stream_position()? + e.size;
+                parse_tag(r, tag_end, metadata)?;
+            }
+            _ => skip(r, e.size)?,
+        }
+    }
+    Ok(())
+}
+
+fn parse_tag(r: &mut dyn ReadSeek, end: u64, metadata: &mut Vec<(String, String)>) -> Result<()> {
+    while r.stream_position()? < end {
+        let e = read_element_header(r)?;
+        match e.id {
+            ids::SIMPLE_TAG => {
+                let st_end = r.stream_position()? + e.size;
+                parse_simple_tag(r, st_end, metadata)?;
+            }
+            _ => skip(r, e.size)?,
+        }
+    }
+    Ok(())
+}
+
+fn parse_simple_tag(
+    r: &mut dyn ReadSeek,
+    end: u64,
+    metadata: &mut Vec<(String, String)>,
+) -> Result<()> {
+    let mut name: Option<String> = None;
+    let mut value: Option<String> = None;
+    while r.stream_position()? < end {
+        let e = read_element_header(r)?;
+        match e.id {
+            ids::TAG_NAME => name = Some(read_string(r, e.size as usize)?),
+            ids::TAG_STRING => value = Some(read_string(r, e.size as usize)?),
+            _ => skip(r, e.size)?,
+        }
+    }
+    if let (Some(n), Some(v)) = (name, value) {
+        let key = n.to_ascii_lowercase();
+        if !key.is_empty() && !v.is_empty() {
+            metadata.push((key, v));
+        }
+    }
+    Ok(())
+}
+
+/// Format a unix timestamp (seconds since 1970-01-01 UTC) as an ISO-8601 date.
+/// Roughly ffprobe-compatible; ignores leap seconds.
+fn format_iso8601(unix_secs: i64) -> String {
+    let (y, m, d, hh, mm, ss) = civil_from_days_seconds(unix_secs);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hh, mm, ss)
+}
+
+fn civil_from_days_seconds(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = unix_secs.div_euclid(86_400);
+    let secs_of_day = unix_secs.rem_euclid(86_400) as u32;
+    // Howard Hinnant's date algorithms — shift so that era 0 starts 0000-03-01.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if m <= 2 { y + 1 } else { y };
+    let hh = secs_of_day / 3600;
+    let mm = (secs_of_day % 3600) / 60;
+    let ss = secs_of_day % 60;
+    (year, m, d, hh, mm, ss)
 }
 
 fn parse_tracks(r: &mut dyn ReadSeek, end: u64, out: &mut Vec<TrackEntry>) -> Result<()> {
@@ -312,6 +435,8 @@ struct MkvDemuxer {
     cluster_state: ClusterState,
     out_queue: std::collections::VecDeque<Packet>,
     time_base: TimeBase,
+    metadata: Vec<(String, String)>,
+    duration_micros: i64,
 }
 
 impl Demuxer for MkvDemuxer {
@@ -329,6 +454,18 @@ impl Demuxer for MkvDemuxer {
                 return Ok(p);
             }
             self.advance()?;
+        }
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn duration_micros(&self) -> Option<i64> {
+        if self.duration_micros > 0 {
+            Some(self.duration_micros)
+        } else {
+            None
         }
     }
 }

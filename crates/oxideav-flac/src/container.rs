@@ -40,6 +40,7 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
 
     let mut extradata = Vec::new();
     let mut streaminfo: Option<Si> = None;
+    let mut metadata: Vec<(String, String)> = Vec::new();
     loop {
         let mut hdr = [0u8; 4];
         input.read_exact(&mut hdr)?;
@@ -48,6 +49,9 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         input.read_exact(&mut payload)?;
         if streaminfo.is_none() && parsed.block_type == BlockType::StreamInfo {
             streaminfo = Some(Si::parse(&payload)?);
+        }
+        if parsed.block_type == BlockType::VorbisComment {
+            parse_vorbis_comment(&payload, &mut metadata);
         }
         extradata.extend_from_slice(&hdr);
         extradata.extend_from_slice(&payload);
@@ -90,12 +94,69 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         params,
     };
 
+    let duration_micros: i64 = if info.sample_rate > 0 && info.total_samples > 0 {
+        (info.total_samples as i128 * 1_000_000 / info.sample_rate as i128) as i64
+    } else {
+        0
+    };
+
     Ok(Box::new(FlacDemuxer {
         input,
         streams: vec![stream],
         scan: FrameScanner::new(info.min_block_size as u32),
         eof: false,
+        metadata,
+        duration_micros,
     }))
+}
+
+/// Parse a Vorbis-comment block payload (FLAC block type 4 shares the
+/// Vorbis comment wire format). Appends normalised (lowercase key, value)
+/// pairs to `out`.
+fn parse_vorbis_comment(buf: &[u8], out: &mut Vec<(String, String)>) {
+    let mut i = 0usize;
+    // Vendor string
+    if buf.len() < 4 {
+        return;
+    }
+    let vlen = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    i += 4;
+    if i + vlen > buf.len() {
+        return;
+    }
+    let vendor = String::from_utf8_lossy(&buf[i..i + vlen]).to_string();
+    i += vlen;
+    if !vendor.is_empty() {
+        out.push(("vendor".into(), vendor));
+    }
+    // Comment count + KEY=VALUE entries
+    if i + 4 > buf.len() {
+        return;
+    }
+    let n = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+    i += 4;
+    for _ in 0..n {
+        if i + 4 > buf.len() {
+            break;
+        }
+        let clen = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+        i += 4;
+        if i + clen > buf.len() {
+            break;
+        }
+        let entry = &buf[i..i + clen];
+        i += clen;
+        if let Some(eq) = entry.iter().position(|&b| b == b'=') {
+            let key = String::from_utf8_lossy(&entry[..eq])
+                .to_ascii_lowercase()
+                .trim()
+                .to_string();
+            let value = String::from_utf8_lossy(&entry[eq + 1..]).trim().to_string();
+            if !key.is_empty() && !value.is_empty() {
+                out.push((key, value));
+            }
+        }
+    }
 }
 
 /// If the file begins with an ID3v2 tag, advance past it. Many FLAC files in
@@ -136,6 +197,8 @@ struct FlacDemuxer {
     streams: Vec<StreamInfo>,
     scan: FrameScanner,
     eof: bool,
+    metadata: Vec<(String, String)>,
+    duration_micros: i64,
 }
 
 /// Buffered FLAC frame scanner.
@@ -283,6 +346,18 @@ impl Demuxer for FlacDemuxer {
             } else {
                 self.scan.buffer.extend_from_slice(&chunk[..n]);
             }
+        }
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn duration_micros(&self) -> Option<i64> {
+        if self.duration_micros > 0 {
+            Some(self.duration_micros)
+        } else {
+            None
         }
     }
 }

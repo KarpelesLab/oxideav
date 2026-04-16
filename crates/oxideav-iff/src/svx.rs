@@ -84,6 +84,7 @@ fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let mut channels: u16 = 1;
     let mut body_offset: u64 = 0;
     let mut body_size: u64 = 0;
+    let mut metadata: Vec<(String, String)> = Vec::new();
 
     while input.stream_position()? < body_limit {
         let c = match read_chunk_header(&mut *input)? {
@@ -105,10 +106,26 @@ fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
                 }
                 pad_after(&mut *input, &c)?;
             }
+            b"NAME" | b"AUTH" | b"ANNO" | b"(c) " | b"CHRS" => {
+                let body = read_body(&mut *input, &c)?;
+                let key = match &c.id {
+                    b"NAME" => "title",
+                    b"AUTH" => "artist",
+                    b"ANNO" => "comment",
+                    b"(c) " => "copyright",
+                    b"CHRS" => "characters",
+                    _ => unreachable!(),
+                };
+                let end = body.iter().position(|&b| b == 0).unwrap_or(body.len());
+                let value = String::from_utf8_lossy(&body[..end]).trim().to_string();
+                if !value.is_empty() {
+                    metadata.push((key.into(), value));
+                }
+                pad_after(&mut *input, &c)?;
+            }
             b"BODY" => {
                 body_offset = input.stream_position()?;
                 body_size = c.size as u64;
-                // Leave the read cursor at body start — demuxer state handles it.
                 break;
             }
             _ => skip_chunk_body(&mut *input, &c)?,
@@ -146,6 +163,12 @@ fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         params,
     };
 
+    let duration_micros: i64 = if sample_rate > 0 {
+        (total_frames as i128 * 1_000_000 / sample_rate as i128) as i64
+    } else {
+        0
+    };
+
     input.seek(SeekFrom::Start(body_offset))?;
     Ok(Box::new(SvxDemuxer {
         input,
@@ -154,6 +177,8 @@ fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         cursor: body_offset,
         channels,
         frames_emitted: 0,
+        metadata,
+        duration_micros,
     }))
 }
 
@@ -171,6 +196,8 @@ struct SvxDemuxer {
     cursor: u64,
     channels: u16,
     frames_emitted: i64,
+    metadata: Vec<(String, String)>,
+    duration_micros: i64,
 }
 
 const CHUNK_FRAMES: u64 = 4096;
@@ -212,6 +239,18 @@ impl Demuxer for SvxDemuxer {
         pkt.duration = Some(frames as i64);
         pkt.flags.keyframe = true;
         Ok(pkt)
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn duration_micros(&self) -> Option<i64> {
+        if self.duration_micros > 0 {
+            Some(self.duration_micros)
+        } else {
+            None
+        }
     }
 }
 

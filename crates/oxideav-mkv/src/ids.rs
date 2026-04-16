@@ -35,6 +35,16 @@ pub const DURATION: u32 = 0x4489;
 pub const SEGMENT_UID: u32 = 0x73A4;
 pub const MUXING_APP: u32 = 0x4D80;
 pub const WRITING_APP: u32 = 0x5741;
+pub const TITLE: u32 = 0x7BA9;
+pub const DATE_UTC: u32 = 0x4461;
+
+// Tags (Segment\Tags\Tag\SimpleTag).
+pub const TAG: u32 = 0x7373;
+pub const TARGETS: u32 = 0x63C0;
+pub const SIMPLE_TAG: u32 = 0x67C8;
+pub const TAG_NAME: u32 = 0x45A3;
+pub const TAG_STRING: u32 = 0x4487;
+pub const TAG_LANGUAGE: u32 = 0x447A;
 
 // Tracks > TrackEntry.
 pub const TRACK_ENTRY: u32 = 0xAE;
