@@ -113,12 +113,28 @@ impl Mp3Decoder {
         let main_data_start = header_len + si_bytes;
         let main_data = &data[main_data_start..];
 
-        // Combine reservoir + this frame's main data.
-        let prev_view: Vec<u8> = self
-            .reservoir
-            .view_from_lookback(si.main_data_begin)
-            .ok_or_else(|| Error::invalid("MP3 decoder: bit reservoir underflow (cold start?)"))?
-            .to_vec();
+        // Combine reservoir + this frame's main data. The first few
+        // frames of a real MP3 stream commonly reference reservoir
+        // data that doesn't exist yet (encoders fill the reservoir
+        // gradually); refresh the reservoir with this frame's data and
+        // emit a silent frame in that case rather than erroring out.
+        let prev_view: Vec<u8> = match self.reservoir.view_from_lookback(si.main_data_begin) {
+            Some(v) => v.to_vec(),
+            None => {
+                self.reservoir.append(main_data);
+                let n = hdr.samples_per_frame() as usize;
+                let bytes = vec![0u8; n * channels * 2];
+                return Ok(Frame::Audio(AudioFrame {
+                    format: SampleFormat::S16,
+                    channels: channels as u16,
+                    sample_rate: hdr.sample_rate,
+                    samples: n as u32,
+                    pts: pkt.pts,
+                    time_base: self.time_base,
+                    data: vec![bytes],
+                }));
+            }
+        };
         let mut combined = prev_view;
         combined.extend_from_slice(main_data);
 

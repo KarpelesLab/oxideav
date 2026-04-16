@@ -24,6 +24,7 @@
 pub mod analysis;
 pub mod bitreader;
 pub mod bitwriter;
+pub mod container;
 pub mod decoder;
 pub mod encoder;
 pub mod frame;
@@ -39,11 +40,18 @@ pub mod synthesis;
 pub mod window;
 
 use oxideav_codec::{CodecRegistry, Decoder, Encoder};
+use oxideav_container::ContainerRegistry;
 use oxideav_core::{CodecCapabilities, CodecId, CodecParameters, Result};
 
 pub const CODEC_ID_STR: &str = "mp3";
 
+/// Back-compat alias for callers that wired up the codec-only `register`.
+/// Prefer `register_codecs` + `register_containers`.
 pub fn register(reg: &mut CodecRegistry) {
+    register_codecs(reg);
+}
+
+pub fn register_codecs(reg: &mut CodecRegistry) {
     let dec_caps = CodecCapabilities::audio("mp3_sw_dec")
         .with_lossy(true)
         .with_intra_only(false) // MP3 uses a bit reservoir — not intra-only
@@ -57,6 +65,10 @@ pub fn register(reg: &mut CodecRegistry) {
         .with_max_channels(2)
         .with_max_sample_rate(48_000);
     reg.register_encoder_impl(CodecId::new(CODEC_ID_STR), enc_caps, make_encoder);
+}
+
+pub fn register_containers(reg: &mut ContainerRegistry) {
+    container::register(reg);
 }
 
 fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {

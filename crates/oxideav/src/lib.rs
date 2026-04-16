@@ -137,7 +137,8 @@ impl Registries {
         }
         #[cfg(feature = "mp3")]
         {
-            oxideav_mp3::register(&mut codecs);
+            oxideav_mp3::register_codecs(&mut codecs);
+            oxideav_mp3::register_containers(&mut containers);
         }
         #[cfg(feature = "mjpeg")]
         {
