@@ -14,6 +14,10 @@ pub fn from_sample_entry(fourcc: &[u8; 4]) -> CodecId {
         b"vp09" => "vp9",
         b"av01" => "av1",
         b"jpeg" | b"mjpa" | b"mjpb" => "mjpeg",
+        // MP4 sample entry `mp4v` with OTI 0x6A is MPEG-1 video per ISO/IEC 14496-1.
+        // A finer mapping (based on the ESDS object_type_indication) belongs at a
+        // higher level — this is a best-effort shortcut.
+        b"mp4v" => "mpeg1video",
         b"lpcm" | b"sowt" | b"twos" => "pcm_s16le",
         other => {
             let s = std::str::from_utf8(other).unwrap_or("????");

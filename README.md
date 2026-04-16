@@ -99,6 +99,7 @@ Ogg ↔ MKV, MP4 → FLAC/MKV, FLAC/PCM → MP4).
 | G.723.1 / G.728 / G.729 | scaffolds              | —                        |
 | **MJPEG (video)** | ✅ baseline 4:2:0/4:2:2/4:4:4/grey | ✅ baseline 4:2:0/4:2:2/4:4:4 |
 | **FFV1 (video)**  | ✅ self-roundtrip bit-exact (v3, 4:2:0 / 4:4:4) | ✅ (ffmpeg interop is follow-up) |
+| **MPEG-1 video**  | 🔶 headers + pipeline wired; I-frame AC decode gap to close | — |
 
 The Vorbis decoder passes bit-exact roundtrips against lewton and
 matches ffmpeg's output within float rounding. The Vorbis encoder

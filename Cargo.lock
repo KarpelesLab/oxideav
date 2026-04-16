@@ -126,7 +126,6 @@ dependencies = [
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
- "oxideav-ffv1",
  "oxideav-flac",
  "oxideav-g7231",
  "oxideav-g728",
@@ -140,6 +139,7 @@ dependencies = [
  "oxideav-mp2",
  "oxideav-mp3",
  "oxideav-mp4",
+ "oxideav-mpeg1video",
  "oxideav-ogg",
  "oxideav-opus",
  "oxideav-pipeline",
@@ -199,14 +199,6 @@ name = "oxideav-core"
 version = "0.0.1"
 dependencies = [
  "thiserror",
-]
-
-[[package]]
-name = "oxideav-ffv1"
-version = "0.0.1"
-dependencies = [
- "oxideav-codec",
- "oxideav-core",
 ]
 
 [[package]]
@@ -319,6 +311,14 @@ dependencies = [
  "oxideav-core",
  "oxideav-flac",
  "oxideav-mjpeg",
+]
+
+[[package]]
+name = "oxideav-mpeg1video"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
 ]
 
 [[package]]

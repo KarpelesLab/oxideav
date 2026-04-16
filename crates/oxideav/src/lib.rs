@@ -20,8 +20,6 @@ pub use oxideav_aac as aac;
 pub use oxideav_basic as basic;
 #[cfg(feature = "celt")]
 pub use oxideav_celt as celt;
-#[cfg(feature = "ffv1")]
-pub use oxideav_ffv1 as ffv1;
 #[cfg(feature = "flac")]
 pub use oxideav_flac as flac;
 #[cfg(feature = "g7231")]
@@ -48,6 +46,8 @@ pub use oxideav_mp2 as mp2;
 pub use oxideav_mp3 as mp3;
 #[cfg(feature = "mp4")]
 pub use oxideav_mp4 as mp4;
+#[cfg(feature = "mpeg1video")]
+pub use oxideav_mpeg1video as mpeg1video;
 #[cfg(feature = "ogg")]
 pub use oxideav_ogg as ogg;
 #[cfg(feature = "opus")]
@@ -126,9 +126,9 @@ impl Registries {
         {
             oxideav_mjpeg::register(&mut codecs);
         }
-        #[cfg(feature = "ffv1")]
+        #[cfg(feature = "mpeg1video")]
         {
-            oxideav_ffv1::register(&mut codecs);
+            oxideav_mpeg1video::register(&mut codecs);
         }
         #[cfg(feature = "aac")]
         {
