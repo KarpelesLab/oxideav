@@ -214,7 +214,7 @@ impl Registries {
         }
         #[cfg(feature = "vp8")]
         {
-            oxideav_vp8::register(&mut codecs);
+            oxideav_vp8::register(&mut codecs, &mut containers);
         }
         #[cfg(feature = "av1")]
         {
