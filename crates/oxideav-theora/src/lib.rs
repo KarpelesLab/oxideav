@@ -12,10 +12,13 @@
 //!   message.
 
 pub mod bitreader;
+pub mod block;
+pub mod coded_order;
 pub mod dct;
 pub mod decoder;
 pub mod headers;
 pub mod huffman;
+pub mod quant;
 
 use oxideav_codec::{CodecRegistry, Decoder};
 use oxideav_core::{CodecCapabilities, CodecId, CodecParameters, Result};

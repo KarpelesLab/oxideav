@@ -1,20 +1,20 @@
 //! Theora video decoder.
 //!
-//! Current milestone: header parsing (identification + comment + setup) from
-//! extradata, codec parameter population, frame-header classification, and
-//! intra-frame *scaffold*. Actual I-frame block decoding is in flight — the
-//! decoder returns `Error::Unsupported` at the point token decoding begins.
-//! This is enough for probe/remux pipelines to work with Theora streams today.
+//! Status: header parsing (identification + comment + setup) from extradata,
+//! codec parameter population, frame-header classification, and full **intra
+//! frame** decode. Inter frames still return `Error::Unsupported`.
 
 use std::collections::VecDeque;
 
 use oxideav_codec::Decoder;
 use oxideav_core::{
-    CodecId, CodecParameters, Error, Frame, Packet, Rational, Result, TimeBase, VideoFrame,
+    CodecId, CodecParameters, Error, Frame, Packet, PixelFormat as CorePixelFormat, Rational,
+    Result, TimeBase, VideoFrame, VideoPlane,
 };
 
 use crate::bitreader::BitReader;
-use crate::headers::{parse_headers_from_extradata, Headers};
+use crate::block::IntraFrameDecoder;
+use crate::headers::{parse_headers_from_extradata, Headers, PixelFormat};
 
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     let headers = if params.extradata.is_empty() {
@@ -94,7 +94,7 @@ impl TheoraDecoder {
     }
 
     fn decode_frame(&mut self, packet: &[u8]) -> Result<()> {
-        let Some(_headers) = self.headers.as_ref() else {
+        let Some(headers) = self.headers.as_ref() else {
             return Err(Error::invalid(
                 "Theora frame packet before headers were parsed",
             ));
@@ -107,18 +107,48 @@ impl TheoraDecoder {
             PacketKind::Frame(FrameType::Intra) => {}
             _ => return Err(Error::invalid("Theora: expected frame packet")),
         }
-        // Parse the frame header so callers at least advance through the
-        // stream without surprises. The actual block decode is a follow-up.
         let mut br = BitReader::new(packet);
-        let _marker = br.read_bit()?; // must be 0
-        let _ftype = br.read_bit()?;
-        let _nqis_count = br.read_u32(6)?; // qis_count; drop
-        let _reserved = br.read_u32(1)?;
-        let _ = br; // avoid unused warning once we bail below.
+        // §7.1 frame header prelude (already consumed 2 bits by classify).
+        let marker = br.read_bit()?;
+        if marker {
+            return Err(Error::invalid("Theora: frame marker non-zero"));
+        }
+        let ftype = br.read_bit()?;
+        if ftype {
+            // inter, already handled above; defensive.
+            return Err(Error::unsupported("theora inter-frame decode: follow-up"));
+        }
+        let mut intra = IntraFrameDecoder::new(headers);
+        intra.read_intra_frame_header(&mut br)?;
+        intra.fill_bcoded_intra();
+        // §7.4 macro-block modes: intra frame — all INTRA (implicit).
+        // §7.6 qii.
+        intra.read_qiis(&mut br)?;
+        // §7.7.3 DCT coefficients.
+        intra.decode_coefficients(&mut br)?;
+        // §7.8.2 undo DC prediction.
+        intra.undo_dc_prediction();
+        // §7.9.4 reconstruction.
+        let mut planes_buf = intra.reconstruct();
+        // §7.10 loop filter.
+        intra.loop_filter(&mut planes_buf);
 
-        Err(Error::unsupported(
-            "theora intra-frame block decode: follow-up",
-        ))
+        // Build VideoFrame. Crop to picture region: picw/pich/picx/picy
+        // (the spec's picy is from the BOTTOM).
+        let id = &headers.identification;
+        let (cropped_planes, out_w, out_h) = crop_to_picture(id, &planes_buf);
+        let core_fmt = pixel_format_to_core(id.pf);
+        let planes = build_video_planes(&cropped_planes, out_w, out_h, id.pf);
+        let frame = VideoFrame {
+            format: core_fmt,
+            width: out_w,
+            height: out_h,
+            pts: self.pending_pts,
+            time_base: self.pending_tb,
+            planes,
+        };
+        self.ready_frames.push_back(frame);
+        Ok(())
     }
 }
 
@@ -165,6 +195,70 @@ impl Decoder for TheoraDecoder {
     fn flush(&mut self) -> Result<()> {
         self.eof = true;
         Ok(())
+    }
+}
+
+/// Crop three full-frame planes (top-down) to the picture region.
+/// Returns `(planes, picture_width, picture_height)`.
+fn crop_to_picture(
+    id: &crate::headers::Identification,
+    full: &[Vec<u8>; 3],
+) -> (Vec<Vec<u8>>, u32, u32) {
+    let pw = id.picw;
+    let ph = id.pich;
+    let mut out = Vec::with_capacity(3);
+    for pli in 0..3 {
+        let (frame_w, frame_h) =
+            crate::coded_order::plane_pixel_dims(id.fmbw as u32, id.fmbh as u32, id.pf, pli);
+        // Chroma offsets & dimensions scale with subsampling.
+        let sx = if pli == 0 { 0 } else { id.pf.chroma_shift_x() };
+        let sy = if pli == 0 { 0 } else { id.pf.chroma_shift_y() };
+        let picx = id.picx >> sx;
+        let picy = id.picy >> sy;
+        let out_w = pw >> sx;
+        let out_h = ph >> sy;
+        let mut plane = Vec::with_capacity((out_w * out_h) as usize);
+        // picy is from the BOTTOM of the frame, but our buffer is top-down.
+        // The picture's bottom row lives at (frame_h - 1 - picy), its top row
+        // at (frame_h - 1 - (picy + out_h - 1)) = (frame_h - picy - out_h).
+        let top_row_in_full = frame_h.saturating_sub(picy + out_h);
+        for row in 0..out_h {
+            let src_row = (top_row_in_full + row) as usize;
+            let src_off = src_row * frame_w as usize + picx as usize;
+            plane.extend_from_slice(&full[pli][src_off..src_off + out_w as usize]);
+        }
+        out.push(plane);
+    }
+    (out, pw, ph)
+}
+
+fn build_video_planes(cropped: &[Vec<u8>], pw: u32, ph: u32, pf: PixelFormat) -> Vec<VideoPlane> {
+    let sx = pf.chroma_shift_x();
+    let sy = pf.chroma_shift_y();
+    let y_stride = pw as usize;
+    let c_w = pw >> sx;
+    let _c_h = ph >> sy;
+    vec![
+        VideoPlane {
+            stride: y_stride,
+            data: cropped[0].clone(),
+        },
+        VideoPlane {
+            stride: c_w as usize,
+            data: cropped[1].clone(),
+        },
+        VideoPlane {
+            stride: c_w as usize,
+            data: cropped[2].clone(),
+        },
+    ]
+}
+
+fn pixel_format_to_core(pf: PixelFormat) -> CorePixelFormat {
+    match pf {
+        PixelFormat::Yuv420 | PixelFormat::Reserved => CorePixelFormat::Yuv420P,
+        PixelFormat::Yuv422 => CorePixelFormat::Yuv422P,
+        PixelFormat::Yuv444 => CorePixelFormat::Yuv444P,
     }
 }
 

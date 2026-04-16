@@ -133,7 +133,77 @@ fn classifies_frame_packets() {
 }
 
 #[test]
-fn intra_frame_decode_is_todo() {
+fn decode_intra_frame_tiny_420p() {
+    let path = "/tmp/ref-theora-iframes-420.ogv";
+    let Ok(data) = std::fs::read(path) else {
+        eprintln!("skipped: {path} not present");
+        return;
+    };
+    let pkts = collect_packets(&data);
+    assert!(pkts.len() >= 4);
+    let hdrs = [&pkts[0][..], &pkts[1][..], &pkts[2][..]];
+    let extradata = xiph_lace(&hdrs);
+    let mut params = CodecParameters::video(CodecId::new("theora"));
+    params.extradata = extradata;
+    let mut dec = make_decoder_for_tests(&params).expect("make_decoder");
+    let packet = Packet::new(0, TimeBase::new(1, 10), pkts[3].clone());
+    dec.send_packet(&packet).expect("send intra packet");
+    let frame = match dec.receive_frame().expect("receive frame") {
+        Frame::Video(v) => v,
+        other => panic!("expected video frame, got {other:?}"),
+    };
+    assert_eq!(frame.format, PixelFormat::Yuv420P);
+    assert_eq!(frame.width, 64);
+    assert_eq!(frame.height, 48);
+    assert_eq!(frame.planes[0].data.len(), 64 * 48);
+    let y = &frame.planes[0].data;
+    let mean: u32 = y.iter().map(|&v| v as u32).sum::<u32>() / y.len() as u32;
+    let mn = *y.iter().min().unwrap();
+    let mx = *y.iter().max().unwrap();
+    // Decoded output should span a wide range (testsrc contains many colours).
+    assert!(
+        mx - mn > 40,
+        "Y plane has suspiciously flat dynamic range: [{mn}, {mx}]"
+    );
+    assert!(
+        (30..230).contains(&mean),
+        "mean Y out of expected range: {mean}"
+    );
+}
+
+#[test]
+fn decode_intra_frame_tiny_444p() {
+    let path = "/tmp/ref-theora-iframes-444.ogv";
+    let Ok(data) = std::fs::read(path) else {
+        eprintln!("skipped: {path} not present");
+        return;
+    };
+    let pkts = collect_packets(&data);
+    if pkts.len() < 4 {
+        eprintln!("skipped: insufficient packets in {path}");
+        return;
+    }
+    let hdrs = [&pkts[0][..], &pkts[1][..], &pkts[2][..]];
+    let extradata = xiph_lace(&hdrs);
+    let mut params = CodecParameters::video(CodecId::new("theora"));
+    params.extradata = extradata;
+    let mut dec = make_decoder_for_tests(&params).expect("make_decoder");
+    let packet = Packet::new(0, TimeBase::new(1, 10), pkts[3].clone());
+    dec.send_packet(&packet).expect("send intra packet");
+    let frame = match dec.receive_frame().expect("receive frame") {
+        Frame::Video(v) => v,
+        other => panic!("expected video frame, got {other:?}"),
+    };
+    assert_eq!(frame.format, PixelFormat::Yuv444P);
+    assert_eq!(frame.width, 64);
+    assert_eq!(frame.height, 48);
+    assert_eq!(frame.planes[0].data.len(), 64 * 48);
+    assert_eq!(frame.planes[1].data.len(), 64 * 48);
+    assert_eq!(frame.planes[2].data.len(), 64 * 48);
+}
+
+#[test]
+fn inter_frame_still_unsupported() {
     let path = "/tmp/ref-theora-gop.ogv";
     let Ok(data) = std::fs::read(path) else {
         eprintln!("skipped: {path} not present");
@@ -145,38 +215,15 @@ fn intra_frame_decode_is_todo() {
     let mut params = CodecParameters::video(CodecId::new("theora"));
     params.extradata = extradata;
     let mut dec = make_decoder_for_tests(&params).expect("make_decoder");
-    let packet = Packet::new(0, TimeBase::new(1, 10), pkts[3].clone());
-    match dec.send_packet(&packet) {
+    // Feed keyframe (should succeed) then an inter frame (should be Unsupported).
+    let kf = Packet::new(0, TimeBase::new(1, 10), pkts[3].clone());
+    dec.send_packet(&kf).expect("send keyframe");
+    let _ = dec.receive_frame();
+    let inter = Packet::new(0, TimeBase::new(1, 10), pkts[4].clone());
+    match dec.send_packet(&inter) {
         Err(Error::Unsupported(msg)) => {
-            assert!(
-                msg.contains("intra-frame block decode") || msg.contains("inter-frame"),
-                "unexpected message: {msg}"
-            );
+            assert!(msg.contains("inter"), "unexpected message: {msg}");
         }
-        other => panic!("expected Unsupported (intra-frame decode follow-up), got {other:?}"),
-    }
-
-    // The second data packet (index 4) should be an inter frame rejected with
-    // the dedicated follow-up message.
-    let packet_inter = Packet::new(0, TimeBase::new(1, 10), pkts[4].clone());
-    let _ = dec.flush();
-    // Re-create decoder to reset state.
-    let mut dec = make_decoder_for_tests(&params).expect("make_decoder again");
-    match dec.send_packet(&packet_inter) {
-        Err(Error::Unsupported(msg)) => {
-            // Either "inter-frame decode" or the generic intra-block message
-            // depending on which bit hits first.
-            assert!(msg.contains("follow-up"), "unexpected message: {msg}");
-        }
-        Ok(()) => {
-            // If we ever accept the packet silently, receive_frame should
-            // still not produce a real frame yet.
-            match dec.receive_frame() {
-                Err(_) => {}
-                Ok(Frame::Video(_)) => panic!("unexpected video frame from inter packet"),
-                Ok(_) => panic!("unexpected non-video frame"),
-            }
-        }
-        other => panic!("unexpected send_packet result: {other:?}"),
+        other => panic!("expected Unsupported for inter frame, got {other:?}"),
     }
 }
