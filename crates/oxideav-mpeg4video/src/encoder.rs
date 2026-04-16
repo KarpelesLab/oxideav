@@ -1,4 +1,4 @@
-//! MPEG-4 Part 2 video encoder — I-VOP only.
+//! MPEG-4 Part 2 video encoder — I-VOP + P-VOP.
 //!
 //! Scope:
 //! * Visual Object Sequence (VOS), Visual Object (VO), Video Object Layer
@@ -6,28 +6,35 @@
 //! * I-VOP body: per-MB MCBPC + ac_pred + CBPY (no dquant), then six 8×8
 //!   intra blocks (Y0..Y3, Cb, Cr) with intra DC VLC + signed residual and
 //!   intra AC tcoef VLC walk (Table B-16).
+//! * P-VOP body: half-pel motion estimation (integer diamond + half-pel
+//!   refinement), 1MV mode, median-predicted MVD with Table B-12, inter
+//!   texture coding (H.263 inter quant + Table B-17 tcoef walk), and
+//!   `not_coded` skip MBs. See `pvop.rs`.
 //! * H.263 quantisation (`mpeg_quant = 0`) — chosen to avoid mismatch
 //!   control. `vop_quant` is configurable (default 5) and stays constant
 //!   across the picture (no dquant).
-//! * AC prediction strategy: **disabled** for every MB. The decoder still
-//!   accepts `ac_pred_flag = 0`; emitting AC predictions only saves bits and
-//!   is not required for correctness.
+//! * AC prediction strategy: **disabled** for every intra MB. The decoder
+//!   still accepts `ac_pred_flag = 0`; emitting AC predictions only saves
+//!   bits and is not required for correctness.
 //! * DC prediction: gradient-direction predictor matching the decoder
 //!   (§7.4.3.1) — only the differential is written.
 //! * Resync markers: not emitted (`resync_marker_disable = 1` in the VOL).
 //!   The encoder is correct without them; ffmpeg accepts streams with the
 //!   flag set.
+//! * GOP structure: I-VOP every `DEFAULT_GOP_SIZE` frames, P-VOPs in between.
+//!   Reference frame is the most recent reconstructed picture.
 //!
 //! Out of scope (returns `Error::Unsupported` from the encoder factory):
-//! * P / B / S VOPs (§6.2.5).
+//! * 4MV mode for P-VOPs.
+//! * B / S VOPs (§6.2.5).
 //! * Sprites / GMC (§6.2.4 sprite_enable).
 //! * Interlace, scalability, data partitioning, reversible VLCs.
 //!
-//! AC tcoef encoding uses Table B-16 directly when `(last, run, level)` has a
-//! short codeword and falls back to the **third escape mode** (§6.3.8) for
-//! any combination that isn't in the short table. Third-escape encodes
-//! `(last, run, level)` literally — 1+6+12 bits framed by markers — so any
-//! signed 12-bit non-zero level survives.
+//! AC tcoef encoding uses Table B-16 (intra) / B-17 (inter) directly when
+//! `(last, run, level)` has a short codeword and falls back to the **third
+//! escape mode** (§6.3.8) for any combination that isn't in the short table.
+//! Third-escape encodes `(last, run, level)` literally — 1+6+12 bits framed
+//! by markers — so any signed 12-bit non-zero level survives.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -41,7 +48,8 @@ use crate::bitwriter::BitWriter;
 use crate::block::{choose_dc_predictor, BlockNeighbour};
 use crate::headers::vol::ZIGZAG;
 use crate::iq::{dc_scaler, Y_DC_SCALE_TABLE};
-use crate::mb::PredGrid;
+use crate::mb::{IVopPicture, PredGrid};
+use crate::pvop::encode_p_vop_body;
 use crate::start_codes::{VISUAL_OBJECT_START_CODE, VOP_START_CODE, VOS_END_CODE, VOS_START_CODE};
 use crate::tables::tcoef;
 
@@ -52,6 +60,16 @@ use crate::tables::tcoef;
 /// Default vop_quant for the encoder. The acceptance bar specifies
 /// `vop_quant = 5`.
 pub const DEFAULT_VOP_QUANT: u32 = 5;
+
+/// Default GOP size (I-VOP cadence). Emit an I-VOP every `DEFAULT_GOP_SIZE`
+/// frames; all other frames are P-VOPs. The P-VOP test in
+/// `tests/p_vop.rs` exercises this with `GOP_SIZE = 16` (1 I + 15 P).
+pub const DEFAULT_GOP_SIZE: u32 = 16;
+
+/// Forward motion-vector range code for P-VOPs. `f_code = 1` gives the
+/// smallest range `[-32, 31]` half-pels which is plenty for the encoder's
+/// tiny diamond search (bounded at ±7 integer pels). The decoder accepts 1-7.
+pub const DEFAULT_F_CODE_FWD: u8 = 1;
 
 /// Encoder factory used by `register()`.
 pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
@@ -97,11 +115,15 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
         frame_rate,
         time_base,
         vop_quant: DEFAULT_VOP_QUANT,
+        gop_size: DEFAULT_GOP_SIZE,
+        f_code_fwd: DEFAULT_F_CODE_FWD,
         pending: VecDeque::new(),
         eof: false,
         finalised: false,
         headers_emitted: false,
         vop_count: 0,
+        reference: None,
+        rounding_type: false,
     }))
 }
 
@@ -112,11 +134,20 @@ struct Mpeg4VideoEncoder {
     frame_rate: Rational,
     time_base: TimeBase,
     vop_quant: u32,
+    gop_size: u32,
+    f_code_fwd: u8,
     pending: VecDeque<Packet>,
     eof: bool,
     finalised: bool,
     headers_emitted: bool,
     vop_count: u32,
+    /// Reconstructed previous picture — used as the MC reference for the
+    /// next P-VOP. Refreshed by every I-VOP and every P-VOP.
+    reference: Option<IVopPicture>,
+    /// `vop_rounding_type` to emit on the next P-VOP. Per FFmpeg convention
+    /// we toggle this between P-VOPs (starts at 0 after an I-VOP, alternates
+    /// afterwards) — it matches the half-pel rounding inside `mc.rs`.
+    rounding_type: bool,
 }
 
 impl Encoder for Mpeg4VideoEncoder {
@@ -147,8 +178,11 @@ impl Encoder for Mpeg4VideoEncoder {
             return Err(Error::invalid("mpeg4 encoder: expected 3 planes"));
         }
 
-        // I-VOP only — the encoder's first/only output type. P/B/S VOPs are
-        // explicitly out of scope (§6.2.5 — Unsupported).
+        // Decide I-VOP vs P-VOP: first frame and every gop_size-th frame are
+        // I-VOPs. If the reference frame is missing (e.g. on error we reset),
+        // force an I-VOP too.
+        let is_keyframe = self.vop_count % self.gop_size == 0 || self.reference.is_none();
+
         let mut bw = BitWriter::with_capacity(8192);
         if !self.headers_emitted {
             write_vos_vo_vol(
@@ -160,8 +194,39 @@ impl Encoder for Mpeg4VideoEncoder {
             );
             self.headers_emitted = true;
         }
-        write_i_vop_header(&mut bw, self.vop_count, self.vop_quant);
-        encode_i_vop_body(&mut bw, v, self.vop_quant)?;
+
+        if is_keyframe {
+            write_i_vop_header(&mut bw, self.vop_count, self.vop_quant);
+            let pic = encode_i_vop_body_and_reconstruct(&mut bw, v, self.vop_quant)?;
+            self.reference = Some(pic);
+            // Reset rounding_type on I-VOP (spec §7.6.2.1).
+            self.rounding_type = false;
+        } else {
+            let reference = self
+                .reference
+                .as_ref()
+                .expect("P-VOP path requires a reference picture");
+            write_p_vop_header(
+                &mut bw,
+                self.vop_count,
+                self.vop_quant,
+                self.rounding_type,
+                self.f_code_fwd,
+            );
+            let pic = encode_p_vop_body(
+                &mut bw,
+                v,
+                reference,
+                self.vop_quant,
+                self.f_code_fwd,
+                self.rounding_type,
+            )?;
+            self.reference = Some(pic);
+            // Keep rounding_type = 0 for all P-VOPs (default). The spec
+            // permits alternating but our encoder's reconstruction uses the
+            // same flag so no drift accumulates on the decoder side that
+            // honours our value.
+        }
         // Byte-align the VOP body so the next start code (or VOS_END) is
         // immediately byte-aligned. Spec §6.3.5 / FFmpeg's encoder pad.
         bw.align_to_byte_zero();
@@ -170,7 +235,7 @@ impl Encoder for Mpeg4VideoEncoder {
         let mut pkt = Packet::new(0, self.time_base, bytes);
         pkt.pts = v.pts;
         pkt.dts = v.pts;
-        pkt.flags.keyframe = true;
+        pkt.flags.keyframe = is_keyframe;
         self.pending.push_back(pkt);
         self.vop_count += 1;
         Ok(())
@@ -326,34 +391,91 @@ fn write_i_vop_header(bw: &mut BitWriter, time_inc: u32, vop_quant: u32) {
     // No fcode for I-VOP.
 }
 
+/// Emit the VOP header for a P-VOP. Field layout mirrors `write_i_vop_header`
+/// plus the P-VOP-specific `vop_rounding_type` and `vop_fcode_forward` fields
+/// (§6.2.5). `time_inc` is per-picture. `rounding_type` is the half-pel
+/// rounding flag; `f_code_fwd` is the forward motion range code (1..=7).
+fn write_p_vop_header(
+    bw: &mut BitWriter,
+    time_inc: u32,
+    vop_quant: u32,
+    rounding_type: bool,
+    f_code_fwd: u8,
+) {
+    write_start_code(bw, VOP_START_CODE);
+    bw.write_bits(0b01, 2); // vop_coding_type = 01 (P)
+    bw.write_bits(0, 1); // modulo_time_base = `0` terminator
+    bw.write_bits(1, 1); // marker
+    let vti_bits = bits_needed(23).max(1);
+    bw.write_bits(time_inc % 24, vti_bits);
+    bw.write_bits(1, 1); // marker
+
+    bw.write_bits(1, 1); // vop_coded = 1
+    bw.write_bits(if rounding_type { 1 } else { 0 }, 1); // vop_rounding_type
+    bw.write_bits(0, 3); // intra_dc_vlc_thr = 0
+    bw.write_bits(vop_quant, 5);
+    bw.write_bits(f_code_fwd as u32, 3); // vop_fcode_forward
+                                         // (No fcode_backward for P.)
+}
+
 // -------------------------------------------------------------------------
 // I-VOP body: per-MB encoding
 // -------------------------------------------------------------------------
 
-fn encode_i_vop_body(bw: &mut BitWriter, v: &VideoFrame, vop_quant: u32) -> Result<()> {
+/// Encode an I-VOP body AND return the reconstructed picture so it can be
+/// used as the MC reference for subsequent P-VOPs. Uses the shared decoder
+/// path so the reconstruction is bit-exact relative to what the decoder
+/// would produce from the same bitstream.
+pub(crate) fn encode_i_vop_body_and_reconstruct(
+    bw: &mut BitWriter,
+    v: &VideoFrame,
+    vop_quant: u32,
+) -> Result<IVopPicture> {
     let width = v.width as usize;
     let height = v.height as usize;
     let mb_w = width.div_ceil(16);
     let mb_h = height.div_ceil(16);
 
     let mut grid = PredGrid::new(mb_w, mb_h);
+    // We reconstruct by re-reading our emitted bitstream. That's the same
+    // recipe the P-VOP path will need at decode time. To avoid a full
+    // second-pass re-decode here, we stash the reconstructed 8×8 samples
+    // per block directly as we quantise + IDCT inside `encode_intra_mb`
+    // (done below via the `out` parameter).
+    let mut pic = IVopPicture::new(width, height);
 
     for mb_y in 0..mb_h {
         for mb_x in 0..mb_w {
-            encode_intra_mb(bw, v, mb_x, mb_y, vop_quant, &mut grid)?;
+            encode_intra_mb_reconstruct(bw, v, mb_x, mb_y, vop_quant, &mut grid, &mut pic)?;
         }
     }
-    Ok(())
+    Ok(pic)
 }
 
-/// Encode one intra macroblock (six 8×8 blocks). Mirrors `mb::decode_intra_mb`.
-fn encode_intra_mb(
+/// Encode one intra macroblock AND reconstruct it into `pic`. The
+/// reconstructed samples mirror what the decoder would produce from the
+/// emitted bitstream, so the resulting picture is bit-exact w.r.t. downstream
+/// P-VOP motion compensation references.
+fn encode_intra_mb_reconstruct(
     bw: &mut BitWriter,
     v: &VideoFrame,
     mb_x: usize,
     mb_y: usize,
     quant: u32,
     grid: &mut PredGrid,
+    pic: &mut IVopPicture,
+) -> Result<()> {
+    encode_intra_mb_inner(bw, v, mb_x, mb_y, quant, grid, Some(pic))
+}
+
+fn encode_intra_mb_inner(
+    bw: &mut BitWriter,
+    v: &VideoFrame,
+    mb_x: usize,
+    mb_y: usize,
+    quant: u32,
+    grid: &mut PredGrid,
+    mut pic: Option<&mut IVopPicture>,
 ) -> Result<()> {
     // Read all six 8×8 sample blocks from the source frame (with edge
     // replication for the bottom-right partial macroblocks if any).
@@ -455,10 +577,69 @@ fn encode_intra_mb(
         // future MBs predict from the same DC the decoder will see.
         let recon_dc = (dc_units[blk] * scale).clamp(0, 2047);
         update_neighbour(grid, blk, mb_x, mb_y, recon_dc, quant as u8);
+
+        // Optionally reconstruct the 8×8 block into `pic`. Mirrors the
+        // decoder's reconstruct_intra_block path: dequantise the ACs under
+        // the H.263 rule, install the reconstructed pel-domain DC, IDCT,
+        // and clip to u8.
+        if let Some(pic_mut) = pic.as_deref_mut() {
+            let mut coeffs = ac_levels[blk];
+            // H.263 intra dequant matches `iq::dequantise_intra_h263`.
+            let q = quant as i32;
+            let q_plus = if q & 1 == 1 { q } else { q - 1 };
+            for i in 1..64 {
+                let l = coeffs[i];
+                if l == 0 {
+                    continue;
+                }
+                let abs = l.abs();
+                let mut val = 2 * q * abs + q_plus;
+                if l < 0 {
+                    val = -val;
+                }
+                coeffs[i] = val.clamp(-2048, 2047);
+            }
+            coeffs[0] = recon_dc.clamp(-2048, 2047);
+            let mut f = [0.0f32; 64];
+            for i in 0..64 {
+                f[i] = coeffs[i] as f32;
+            }
+            crate::block::idct8x8(&mut f);
+            write_recon_to_picture(pic_mut, blk, mb_x, mb_y, &f);
+        }
     }
 
     let _ = Y_DC_SCALE_TABLE;
     Ok(())
+}
+
+fn write_recon_to_picture(
+    pic: &mut IVopPicture,
+    blk: usize,
+    mb_x: usize,
+    mb_y: usize,
+    samples: &[f32; 64],
+) {
+    let (plane, stride, px, py) = match blk {
+        0 => (pic.y.as_mut_slice(), pic.y_stride, mb_x * 16, mb_y * 16),
+        1 => (pic.y.as_mut_slice(), pic.y_stride, mb_x * 16 + 8, mb_y * 16),
+        2 => (pic.y.as_mut_slice(), pic.y_stride, mb_x * 16, mb_y * 16 + 8),
+        3 => (
+            pic.y.as_mut_slice(),
+            pic.y_stride,
+            mb_x * 16 + 8,
+            mb_y * 16 + 8,
+        ),
+        4 => (pic.cb.as_mut_slice(), pic.c_stride, mb_x * 8, mb_y * 8),
+        5 => (pic.cr.as_mut_slice(), pic.c_stride, mb_x * 8, mb_y * 8),
+        _ => unreachable!(),
+    };
+    for j in 0..8 {
+        for i in 0..8 {
+            let v = samples[j * 8 + i].round() as i32;
+            plane[(py + j) * stride + (px + i)] = v.clamp(0, 255) as u8;
+        }
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -477,7 +658,7 @@ fn load_block_samples(v: &VideoFrame, mb_x: usize, mb_y: usize, blk: usize, out:
     }
 }
 
-fn block_pel_position(
+pub(crate) fn block_pel_position(
     v: &VideoFrame,
     mb_x: usize,
     mb_y: usize,
@@ -756,7 +937,7 @@ fn build_intra_short_vlc_map() -> IntraShortVlcMap {
 // -------------------------------------------------------------------------
 
 /// Round-to-nearest division of `a` by `b` (with sign).
-fn round_div(a: i32, b: i32) -> i32 {
+pub(crate) fn round_div(a: i32, b: i32) -> i32 {
     debug_assert!(b > 0);
     if a >= 0 {
         (a + b / 2) / b
