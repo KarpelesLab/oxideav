@@ -309,11 +309,9 @@ impl Sdl2Lib {
                 Err(e) => last_err = Some(e),
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            // Synthesise a "library not found" error if the candidate
-            // list was somehow empty (it isn't, but be defensive).
-            libloading::Error::DlOpenUnknown
-        }))
+        // Synthesise a "library not found" error if the candidate list
+        // was somehow empty (it isn't, but be defensive).
+        Err(last_err.unwrap_or(libloading::Error::DlOpenUnknown))
     }
 
     /// Resolve every entry point we use. If any one is missing the
