@@ -10,11 +10,13 @@
 //! * Per intra frame we run forward DCT (`fdct8x8`) → integer dequant rounding
 //!   → forward DC prediction → token RLE → Huffman encoding using the embedded
 //!   setup's trees.
-//! * Per inter (P) frame we run a simple SAD-based mode decision per macro
-//!   block, choose the cheapest of {INTER_NOMV, INTRA, INTER_MV(±8 search)},
-//!   encode SBPM/BCODED, mode alphabet (MSCHEME with greedy scan), MV stream
+//! * Per inter (P) frame we run an SAD-based mode decision per macro-block
+//!   with full-pel motion search inside `ME_RANGE`, considering modes
+//!   {INTER_NOMV, INTRA, INTER_MV, INTER_MV_LAST, INTER_MV_LAST2,
+//!   INTER_GOLDEN_NOMV, INTER_GOLDEN_MV}. The encoder emits SBPM/BCODED,
+//!   the mode alphabet (MSCHEME=0 with the natural alphabet), the MV stream
 //!   (Table 7.23 VLC), then DCT the residual against the chosen predictor and
-//!   emit tokens with the inter-frame Huffman group.
+//!   Huffman-codes it with the inter-frame table group.
 //!
 //! After encoding we always reconstruct the frame (apply the same
 //! dequant/IDCT pipeline as the decoder) to update `prev_ref` (and
@@ -22,10 +24,15 @@
 //! decoder to follow.
 //!
 //! GOP structure: a keyframe at frame 0 and every `keyint` frames thereafter
-//! (default 12). Callers can override via [`EncoderOptions::keyint`].
+//! (default [`DEFAULT_KEYINT`]). Callers can override via
+//! [`EncoderOptions::keyint`] + [`make_encoder_with_options`].
 //!
-//! No motion compensation between non-(0,0) MV and chroma is currently
-//! attempted with refinement search; chroma MV uses the spec's `chroma_mv_split`.
+//! Current limitations (future work):
+//!   * Integer-pel motion estimation only (no sub-pel refinement).
+//!   * No rate control: QI is fixed at [`DEFAULT_QI`].
+//!   * 4-MV (`INTER_MV_FOUR`) mode is not produced.
+//!   * Motion search is a brute-force full-pel scan within ±`ME_RANGE`.
+//!
 //! The encoder always picks HTI 0 for the Huffman group selectors and always
 //! emits `MSCHEME=0` so the alphabet is the natural 0..7 ordering shipped with
 //! the decoder.
@@ -53,7 +60,12 @@ const STANDARD_SETUP: &[u8] = include_bytes!("encoder_data/standard_setup.bin");
 pub const DEFAULT_QI: u8 = 32;
 
 /// Default keyframe interval (one I-frame every N frames).
-pub const DEFAULT_KEYINT: u32 = 12;
+pub const DEFAULT_KEYINT: u32 = 30;
+
+/// Default maximum motion-vector search radius in luma pixels. Task spec
+/// asks for ±16; we use 15 to stay within the MV-VLC ±31 half-pel range
+/// (since our MV magnitudes encode as full_pel × 2).
+pub const DEFAULT_ME_RANGE: i32 = 15;
 
 /// SAD threshold (sum of absolute diffs over a 16x16 luma MB) below which an
 /// MB is encoded as INTER_NOMV with all blocks marked uncoded (skip).
@@ -63,11 +75,52 @@ const SKIP_SAD_THRESHOLD: i32 = 384;
 /// of an INTER_MV codeword over INTER_NOMV.
 const MV_GAIN_THRESHOLD: i32 = 256;
 
-/// Maximum motion-vector search radius in luma pixels.
-const ME_RANGE: i32 = 8;
+/// SAD-bias credit given to INTER_MV_LAST / INTER_MV_LAST2 matches over a
+/// newly-coded INTER_MV. These modes cost no MV bits, so if the predictor is
+/// nearly as good we save a whole Table 7.23 codeword.
+const LAST_MV_BONUS: i32 = 128;
 
-/// Build a Theora encoder for the given [`CodecParameters`].
+/// Extra cost charged against switching to the GOLDEN reference (each switch
+/// introduces a RFI flip during DC prediction + breaks the last_mv chain).
+const GOLDEN_PENALTY: i32 = 128;
+
+/// Encoder tunable options exposed by [`make_encoder_with_options`].
+#[derive(Clone, Debug)]
+pub struct EncoderOptions {
+    /// Fixed quantisation index (0..63). Higher = lower quality, smaller packets.
+    pub qi: u8,
+    /// Keyframe interval: emit an I-frame every `keyint` frames (≥ 1).
+    pub keyint: u32,
+    /// Full-pel motion-estimation search radius, in luma pixels.
+    /// Clamped to `1..=15` internally (MV VLC codec range).
+    pub me_range: i32,
+    /// If true, consider INTER_GOLDEN_NOMV / INTER_GOLDEN_MV against the
+    /// golden (last-keyframe) reference during mode decision.
+    pub use_golden: bool,
+}
+
+impl Default for EncoderOptions {
+    fn default() -> Self {
+        Self {
+            qi: DEFAULT_QI,
+            keyint: DEFAULT_KEYINT,
+            me_range: DEFAULT_ME_RANGE,
+            use_golden: true,
+        }
+    }
+}
+
+/// Build a Theora encoder for the given [`CodecParameters`], using
+/// [`EncoderOptions::default`].
 pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
+    make_encoder_with_options(params, EncoderOptions::default())
+}
+
+/// Build a Theora encoder with the given tunable options.
+pub fn make_encoder_with_options(
+    params: &CodecParameters,
+    opts: EncoderOptions,
+) -> Result<Box<dyn Encoder>> {
     let width = params
         .width
         .ok_or_else(|| Error::invalid("Theora encoder: missing width"))?;
@@ -83,6 +136,13 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
     if width == 0 || height == 0 {
         return Err(Error::invalid("Theora encoder: zero frame dimensions"));
     }
+    if opts.keyint == 0 {
+        return Err(Error::invalid("Theora encoder: keyint must be >= 1"));
+    }
+    if opts.qi > 63 {
+        return Err(Error::invalid("Theora encoder: qi must be <= 63"));
+    }
+    let me_range = opts.me_range.clamp(1, 15);
 
     let theora_pf = TheoraPixelFormat::Yuv420;
     let fmbw = width.div_ceil(16) as u16;
@@ -140,8 +200,10 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
         id_packet,
         comment_packet,
         setup_packet,
-        qi: DEFAULT_QI,
-        keyint: DEFAULT_KEYINT,
+        qi: opts.qi,
+        keyint: opts.keyint,
+        me_range,
+        use_golden: opts.use_golden,
         frame_index: 0,
         prev_ref: None,
         golden_ref: None,
@@ -166,6 +228,8 @@ struct TheoraEncoder {
     setup_packet: Vec<u8>,
     qi: u8,
     keyint: u32,
+    me_range: i32,
+    use_golden: bool,
     frame_index: u32,
     /// Previous reconstructed frame (post-loop-filter pixel buffers).
     /// Each plane is stored TOP-DOWN at the coded frame size.
@@ -380,8 +444,13 @@ impl TheoraEncoder {
                 }
             } else {
                 // Build motion-compensated predictor in BOTTOM-UP row order to
-                // match `fetch_block_pixels` orientation.
-                let pred = self.predict_inter_block_bottom_up(prev, pli, bx, by, mvs[bi]);
+                // match `fetch_block_pixels` orientation. Pick reference
+                // per-mode (rfi=1 prev, rfi=2 golden).
+                let ref_buf = match mode.rfi() {
+                    2 => self.golden_ref.as_ref().unwrap_or(prev),
+                    _ => prev,
+                };
+                let pred = self.predict_inter_block_bottom_up(ref_buf, pli, bx, by, mvs[bi]);
                 for k in 0..64 {
                     residual[k] = block[k] - pred[k] as f32;
                 }
@@ -609,6 +678,13 @@ impl TheoraEncoder {
         let sbw = plane0.nbw.div_ceil(4);
         let sbh = plane0.nbh.div_ceil(4);
 
+        // LAST-MV tracking must walk MBs in *the same* coded order the
+        // decoder uses (spec §7.3.5): only MBs that actually transmit a new
+        // MV (InterMv / InterGoldenMv / InterMvFour) update last_mv; the LAST
+        // / LAST2 modes reuse previously emitted MVs. Mirror the decoder here.
+        let mut last_mv = (0i32, 0i32);
+        let mut last_mv2 = (0i32, 0i32);
+
         let mut out = Vec::with_capacity((mbw * mbh) as usize);
         for sby in 0..sbh {
             for sbx in 0..sbw {
@@ -635,9 +711,11 @@ impl TheoraEncoder {
                         }
                     }
 
-                    // Try zero MV.
+                    // Zero-MV reference SAD.
                     let sad_zero = self.mb_sad(frame, prev, bxs, bys, (0, 0));
-                    // Skip threshold.
+
+                    // Skip (uncoded) heuristic: very small residual against
+                    // LAST at (0,0) — the frame barely changed here.
                     if sad_zero <= SKIP_SAD_THRESHOLD {
                         out.push(MbDecision {
                             mbx,
@@ -651,21 +729,17 @@ impl TheoraEncoder {
                         continue;
                     }
 
-                    // Try INTRA.
+                    // INTRA cost (mean-absolute-deviation proxy).
                     let intra_cost = self.mb_sad_intra(frame, bxs, bys);
 
-                    // Search small ±ME_RANGE region (full-pel, MV in luma
-                    // half-pel units = 2× full-pel).
+                    // Full-pel motion search against LAST within ±me_range.
+                    // Encoded MV is in half-pel units: full_pel × 2.
                     let mut best_mv = (0i32, 0i32);
                     let mut best_sad = sad_zero;
-                    for dy in -ME_RANGE..=ME_RANGE {
-                        for dx in -ME_RANGE..=ME_RANGE {
-                            // MV is encoded with Y positive going UP per spec
-                            // but our MC already does that conversion. We use
-                            // the same half-pel convention here. Convert search
-                            // step (full-pel) to half-pel by ×2.
+                    let r = self.me_range;
+                    for dy in -r..=r {
+                        for dx in -r..=r {
                             let mv = (dx * 2, dy * 2);
-                            // Skip the (0,0) one we already did.
                             if mv == (0, 0) {
                                 continue;
                             }
@@ -677,41 +751,148 @@ impl TheoraEncoder {
                         }
                     }
 
-                    // Mode decision: pick lowest SAD among
-                    //   {INTRA, INTER_NOMV, INTER_MV(best_mv)}.
-                    // Add small bias against MV (which costs more bits).
-                    let mv_cost_with_bias = best_sad + MV_GAIN_THRESHOLD;
-                    if intra_cost < sad_zero.min(mv_cost_with_bias) {
-                        out.push(MbDecision {
-                            mbx,
-                            mby,
-                            mode: Mode::Intra,
-                            mv: (0, 0),
-                            bcoded: true,
-                            luma_bis: bis,
-                            chroma_bis,
-                        });
-                    } else if mv_cost_with_bias < sad_zero {
-                        out.push(MbDecision {
-                            mbx,
-                            mby,
-                            mode: Mode::InterMv,
-                            mv: best_mv,
-                            bcoded: true,
-                            luma_bis: bis,
-                            chroma_bis,
-                        });
+                    // LAST / LAST2 candidates: evaluate SAD at the two prior
+                    // MVs. If either beats INTER_NOMV and is close to the
+                    // best-found MV, prefer them (no MV bits).
+                    let sad_last = if last_mv != (0, 0) {
+                        self.mb_sad(frame, prev, bxs, bys, last_mv)
                     } else {
-                        out.push(MbDecision {
-                            mbx,
-                            mby,
+                        i32::MAX
+                    };
+                    let sad_last2 = if last_mv2 != (0, 0) && last_mv2 != last_mv {
+                        self.mb_sad(frame, prev, bxs, bys, last_mv2)
+                    } else {
+                        i32::MAX
+                    };
+
+                    // GOLDEN candidates.
+                    let golden_ref = if self.use_golden {
+                        self.golden_ref.as_ref()
+                    } else {
+                        None
+                    };
+                    let (best_gmv, best_gsad) = if let Some(golden) = golden_ref {
+                        let sad_gzero = self.mb_sad(frame, golden, bxs, bys, (0, 0));
+                        let mut g_best_mv = (0i32, 0i32);
+                        let mut g_best_sad = sad_gzero;
+                        // Coarser search grid for golden (step 2) — it matters
+                        // less for compression.
+                        let step = 2i32;
+                        let mut dy = -r;
+                        while dy <= r {
+                            let mut dx = -r;
+                            while dx <= r {
+                                let mv = (dx * 2, dy * 2);
+                                if mv != (0, 0) {
+                                    let sad = self.mb_sad(frame, golden, bxs, bys, mv);
+                                    if sad < g_best_sad {
+                                        g_best_sad = sad;
+                                        g_best_mv = mv;
+                                    }
+                                }
+                                dx += step;
+                            }
+                            dy += step;
+                        }
+                        (g_best_mv, g_best_sad)
+                    } else {
+                        ((0, 0), i32::MAX)
+                    };
+
+                    // Compose candidate scoreboard. Lower is better. Each
+                    // candidate is (score, mode, mv, updates_last).
+                    //
+                    //   INTER_NOMV     : sad_zero                                   (0 MV bits)
+                    //   INTER_MV       : best_sad + MV_GAIN_THRESHOLD                (two MV VLCs)
+                    //   INTER_MV_LAST  : sad_last - LAST_MV_BONUS                    (rank bits only)
+                    //   INTER_MV_LAST2 : sad_last2 - LAST_MV_BONUS/2                 (rank bits only, rarer)
+                    //   INTER_GOLDEN_NOMV : sad_g0 + GOLDEN_PENALTY                 (rank bits only)
+                    //   INTER_GOLDEN_MV : best_gsad + GOLDEN_PENALTY + MV_GAIN_THRESHOLD
+                    //   INTRA          : intra_cost                                  (plain DCT bits)
+                    let no_mv_score = sad_zero;
+                    let mv_score = best_sad + MV_GAIN_THRESHOLD;
+                    let last_score = sad_last.saturating_sub(LAST_MV_BONUS);
+                    let last2_score = sad_last2.saturating_sub(LAST_MV_BONUS / 2);
+                    let intra_score = intra_cost;
+                    let gnm_score = best_gsad.saturating_add(GOLDEN_PENALTY).saturating_add(
+                        if best_gmv == (0, 0) {
+                            0
+                        } else {
+                            MV_GAIN_THRESHOLD
+                        },
+                    );
+
+                    #[derive(Clone, Copy)]
+                    struct Cand {
+                        score: i32,
+                        mode: Mode,
+                        mv: (i32, i32),
+                    }
+                    let cands = [
+                        Cand {
+                            score: no_mv_score,
                             mode: Mode::InterNoMv,
                             mv: (0, 0),
-                            bcoded: true,
-                            luma_bis: bis,
-                            chroma_bis,
-                        });
+                        },
+                        Cand {
+                            score: mv_score,
+                            mode: Mode::InterMv,
+                            mv: best_mv,
+                        },
+                        Cand {
+                            score: last_score,
+                            mode: Mode::InterMvLast,
+                            mv: last_mv,
+                        },
+                        Cand {
+                            score: last2_score,
+                            mode: Mode::InterMvLast2,
+                            mv: last_mv2,
+                        },
+                        Cand {
+                            score: intra_score,
+                            mode: Mode::Intra,
+                            mv: (0, 0),
+                        },
+                        Cand {
+                            score: gnm_score,
+                            mode: if best_gmv == (0, 0) {
+                                Mode::InterGoldenNoMv
+                            } else {
+                                Mode::InterGoldenMv
+                            },
+                            mv: best_gmv,
+                        },
+                    ];
+                    let mut best_cand = cands[0];
+                    for c in &cands[1..] {
+                        if c.score < best_cand.score {
+                            best_cand = *c;
+                        }
                     }
+
+                    // Update LAST / LAST2 only on modes that transmit a new MV
+                    // (spec §7.3.5.3 Table 7.33).
+                    match best_cand.mode {
+                        Mode::InterMv | Mode::InterGoldenMv => {
+                            last_mv2 = last_mv;
+                            last_mv = best_cand.mv;
+                        }
+                        Mode::InterMvLast2 => {
+                            std::mem::swap(&mut last_mv, &mut last_mv2);
+                        }
+                        _ => {}
+                    }
+
+                    out.push(MbDecision {
+                        mbx,
+                        mby,
+                        mode: best_cand.mode,
+                        mv: best_cand.mv,
+                        bcoded: true,
+                        luma_bis: bis,
+                        chroma_bis,
+                    });
                 }
             }
         }

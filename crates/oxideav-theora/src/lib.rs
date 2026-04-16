@@ -13,8 +13,15 @@
 //! * I-frame **encode** — done (intra-only). Header packets are constructed
 //!   from input parameters; the setup table is shipped as embedded standard
 //!   libtheora bytes; per-frame DCT + DC prediction + token RLE +
-//!   Huffman encoding mirrors the decode path. P-frame encoding is **not**
-//!   implemented — every frame is emitted as a keyframe.
+//!   Huffman encoding mirrors the decode path.
+//! * P-frame **encode** — done. Full-pel motion estimation within
+//!   `±DEFAULT_ME_RANGE`; mode decision picks between INTRA, INTER_NOMV,
+//!   INTER_MV, INTER_MV_LAST, INTER_MV_LAST2, INTER_GOLDEN_NOMV,
+//!   INTER_GOLDEN_MV; LAST and GOLDEN reference frames are managed and
+//!   updated per spec. Configurable keyframe interval and ME range via
+//!   [`encoder::EncoderOptions`] (see [`encoder::make_encoder_with_options`]).
+//!   Limitations: integer-pel only (no sub-pel refinement), no rate
+//!   control, `INTER_MV_FOUR` not produced.
 
 pub mod bitreader;
 pub mod block;

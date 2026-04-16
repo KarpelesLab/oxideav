@@ -8,7 +8,8 @@ use oxideav_core::{
     VideoFrame, VideoPlane,
 };
 use oxideav_theora::{
-    classify_packet, make_decoder_for_tests, make_encoder_for_tests, FrameType, PacketKind,
+    classify_packet, encoder::make_encoder_with_options, encoder::EncoderOptions,
+    make_decoder_for_tests, make_encoder_for_tests, FrameType, PacketKind,
 };
 
 /// Build a test 64x64 yuv420p frame from the canonical input file generated
@@ -62,6 +63,22 @@ fn build_encoder() -> Box<dyn Encoder> {
     params.pixel_format = Some(PixelFormat::Yuv420P);
     params.frame_rate = Some(Rational::new(24, 1));
     make_encoder_for_tests(&params).expect("encoder")
+}
+
+/// Build an encoder pinned to the legacy keyint=12 schedule (the small-clip
+/// test below exercises that cadence explicitly).
+fn build_encoder_keyint12() -> Box<dyn Encoder> {
+    let mut params = CodecParameters::video(CodecId::new("theora"));
+    params.media_type = MediaType::Video;
+    params.width = Some(64);
+    params.height = Some(64);
+    params.pixel_format = Some(PixelFormat::Yuv420P);
+    params.frame_rate = Some(Rational::new(24, 1));
+    let opts = EncoderOptions {
+        keyint: 12,
+        ..Default::default()
+    };
+    make_encoder_with_options(&params, opts).expect("encoder")
 }
 
 fn collect_encoded_packets(enc: &mut dyn Encoder, frame: &VideoFrame) -> Vec<Packet> {
@@ -275,7 +292,7 @@ fn encode_pframe_clip_round_trip_via_own_decoder() {
     };
     assert!(!frames.is_empty());
 
-    let mut enc = build_encoder();
+    let mut enc = build_encoder_keyint12();
     let mut frame_pkts: Vec<Packet> = Vec::new();
     let mut header_pkts: Vec<Packet> = Vec::new();
     for f in &frames {
@@ -489,6 +506,303 @@ fn ffmpeg_can_decode_our_pframe_clip() {
         file_size
     );
     assert!(overall >= 0.90, "ffmpeg P-frame match {overall:.4} < 0.90");
+}
+
+// --- PSNR-based P-frame compression test ---------------------------------
+
+/// Synthetic 30-frame "moving test pattern" clip: a Y gradient with a solid
+/// rectangle that shifts right by 1 pixel per frame. Chroma is neutral. The
+/// motion is purely horizontal translation so a decent motion estimator
+/// finds near-zero residuals.
+fn generate_moving_pattern_clip(n_frames: u32) -> Vec<VideoFrame> {
+    let w: u32 = 64;
+    let h: u32 = 64;
+    let mut out = Vec::with_capacity(n_frames as usize);
+    for f in 0..n_frames {
+        let mut y = vec![0u8; (w * h) as usize];
+        for j in 0..h {
+            for i in 0..w {
+                // Diagonal gradient base.
+                y[(j * w + i) as usize] = ((i + j) * 2).clamp(0, 255) as u8;
+            }
+        }
+        // Solid white rectangle (16x16) moving horizontally.
+        let rx = (4 + f) % (w - 16);
+        let ry = 20u32;
+        for j in 0..16u32 {
+            for i in 0..16u32 {
+                y[((ry + j) * w + (rx + i)) as usize] = 220;
+            }
+        }
+        // Neutral chroma planes.
+        let u = vec![128u8; (w / 2 * h / 2) as usize];
+        let v = vec![128u8; (w / 2 * h / 2) as usize];
+        out.push(VideoFrame {
+            format: PixelFormat::Yuv420P,
+            width: w,
+            height: h,
+            pts: Some(f as i64),
+            time_base: TimeBase::new(1, 30),
+            planes: vec![
+                VideoPlane {
+                    stride: w as usize,
+                    data: y,
+                },
+                VideoPlane {
+                    stride: (w / 2) as usize,
+                    data: u,
+                },
+                VideoPlane {
+                    stride: (w / 2) as usize,
+                    data: v,
+                },
+            ],
+        });
+    }
+    out
+}
+
+/// PSNR (dB) between two equally-sized 8-bit planes.
+fn psnr_db(a: &[u8], b: &[u8]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let mut sse: f64 = 0.0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let d = *x as f64 - *y as f64;
+        sse += d * d;
+    }
+    let mse = sse / a.len() as f64;
+    if mse <= 0.0 {
+        return 99.0;
+    }
+    10.0 * (255.0_f64 * 255.0 / mse).log10()
+}
+
+fn build_enc_with_opts(opts: oxideav_theora::encoder::EncoderOptions) -> Box<dyn Encoder> {
+    let mut params = CodecParameters::video(CodecId::new("theora"));
+    params.media_type = MediaType::Video;
+    params.width = Some(64);
+    params.height = Some(64);
+    params.pixel_format = Some(PixelFormat::Yuv420P);
+    params.frame_rate = Some(Rational::new(30, 1));
+    oxideav_theora::encoder::make_encoder_with_options(&params, opts).expect("encoder")
+}
+
+/// Encode `frames` with the given options, decode with our decoder, and
+/// return (decoded_frames, per-frame packet sizes, per-frame kinds).
+fn encode_decode_clip(
+    frames: &[VideoFrame],
+    opts: oxideav_theora::encoder::EncoderOptions,
+) -> (Vec<VideoFrame>, Vec<usize>, Vec<FrameType>) {
+    let mut enc = build_enc_with_opts(opts);
+    let mut frame_pkts: Vec<Packet> = Vec::new();
+    let mut header_pkts: Vec<Packet> = Vec::new();
+    for f in frames {
+        enc.send_frame(&Frame::Video(f.clone())).expect("send");
+        while let Ok(p) = enc.receive_packet() {
+            if p.flags.header {
+                header_pkts.push(p);
+            } else {
+                frame_pkts.push(p);
+            }
+        }
+    }
+    assert_eq!(header_pkts.len(), 3);
+    assert_eq!(frame_pkts.len(), frames.len());
+    let sizes: Vec<usize> = frame_pkts.iter().map(|p| p.data.len()).collect();
+    let kinds: Vec<FrameType> = frame_pkts
+        .iter()
+        .map(|p| match classify_packet(&p.data).unwrap() {
+            PacketKind::Frame(t) => t,
+            _ => panic!("expected frame packet"),
+        })
+        .collect();
+
+    let extradata = enc.output_params().extradata.clone();
+    let mut p2 = CodecParameters::video(CodecId::new("theora"));
+    p2.extradata = extradata;
+    let mut dec = make_decoder_for_tests(&p2).expect("decoder");
+
+    let mut decoded: Vec<VideoFrame> = Vec::new();
+    for p in &frame_pkts {
+        let pkt = Packet::new(0, TimeBase::new(1, 30), p.data.clone());
+        dec.send_packet(&pkt).expect("send packet");
+        while let Ok(f) = dec.receive_frame() {
+            if let Frame::Video(v) = f {
+                decoded.push(v);
+            }
+        }
+    }
+    (decoded, sizes, kinds)
+}
+
+#[test]
+fn pframe_moving_pattern_psnr_and_bitrate() {
+    let frames = generate_moving_pattern_clip(30);
+    assert_eq!(frames.len(), 30);
+
+    // Run 1: default GOP (keyint=30 → 1 I-frame, 29 P-frames).
+    let opts_p = oxideav_theora::encoder::EncoderOptions {
+        keyint: 30,
+        ..Default::default()
+    };
+    let (decoded_p, sizes_p, kinds_p) = encode_decode_clip(&frames, opts_p);
+    let total_p: usize = sizes_p.iter().sum();
+
+    // Run 2: all-keyframe (keyint=1).
+    let opts_i = oxideav_theora::encoder::EncoderOptions {
+        keyint: 1,
+        ..Default::default()
+    };
+    let (_decoded_i, sizes_i, kinds_i) = encode_decode_clip(&frames, opts_i);
+    let total_i: usize = sizes_i.iter().sum();
+
+    // Sanity: run 1 has exactly one intra (the first), run 2 has all intra.
+    assert_eq!(kinds_p[0], FrameType::Intra);
+    for k in &kinds_p[1..] {
+        assert_eq!(*k, FrameType::Inter, "expected P-frames after first I");
+    }
+    for k in &kinds_i {
+        assert_eq!(*k, FrameType::Intra);
+    }
+
+    // PSNR on P-frames only: decoded_p[1..] vs original luma planes.
+    let mut psnr_sum = 0.0f64;
+    let mut psnr_count = 0u32;
+    let mut min_psnr = f64::INFINITY;
+    for (i, (orig, dec)) in frames.iter().zip(decoded_p.iter()).enumerate().skip(1) {
+        let p = psnr_db(&orig.planes[0].data, &dec.planes[0].data);
+        psnr_sum += p;
+        psnr_count += 1;
+        min_psnr = min_psnr.min(p);
+        eprintln!("P-frame {i}: PSNR(Y) = {p:.2} dB, {} bytes", sizes_p[i]);
+    }
+    let avg_psnr = psnr_sum / psnr_count as f64;
+    eprintln!(
+        "moving-pattern clip: avg P-frame Y-PSNR = {:.2} dB, min = {:.2} dB",
+        avg_psnr, min_psnr
+    );
+    eprintln!(
+        "bitrate compare: keyint=30 total {} bytes (I={}, P={}), keyint=1 total {} bytes ({}x)",
+        total_p,
+        sizes_p[0],
+        total_p - sizes_p[0],
+        total_i,
+        total_i as f64 / total_p as f64
+    );
+
+    assert!(
+        min_psnr > 28.0,
+        "P-frame PSNR too low: min={min_psnr:.2} dB (target > 28 dB)"
+    );
+    assert!(
+        total_p < total_i,
+        "P-frame bitstream ({total_p} B) should be smaller than all-keyframe ({total_i} B)"
+    );
+}
+
+#[test]
+fn pframe_moving_pattern_ffmpeg_interop() {
+    if std::process::Command::new("/usr/bin/ffmpeg")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipped: /usr/bin/ffmpeg not available");
+        return;
+    }
+    let frames = generate_moving_pattern_clip(30);
+    let opts = oxideav_theora::encoder::EncoderOptions {
+        keyint: 30,
+        ..Default::default()
+    };
+    let mut enc = build_enc_with_opts(opts);
+    let mut frame_pkts: Vec<Packet> = Vec::new();
+    let mut header_pkts: Vec<Packet> = Vec::new();
+    for f in &frames {
+        enc.send_frame(&Frame::Video(f.clone())).expect("send");
+        while let Ok(p) = enc.receive_packet() {
+            if p.flags.header {
+                header_pkts.push(p);
+            } else {
+                frame_pkts.push(p);
+            }
+        }
+    }
+
+    // Mux to Ogg identical to the existing ffmpeg_can_decode_our_pframe_clip
+    // test, but shorter.
+    let serial = 0xAABB_CCDDu32;
+    let mut ogg = Vec::new();
+    let mut seq = 0u32;
+    write_ogg_page(
+        &mut ogg,
+        serial,
+        seq,
+        0,
+        &[&header_pkts[0].data],
+        true,
+        false,
+    );
+    seq += 1;
+    write_ogg_page(
+        &mut ogg,
+        serial,
+        seq,
+        0,
+        &[&header_pkts[1].data, &header_pkts[2].data],
+        false,
+        false,
+    );
+    seq += 1;
+
+    let kfgshift = 6u32;
+    let mut last_kf_index: u64 = 0;
+    for (i, p) in frame_pkts.iter().enumerate() {
+        if p.flags.keyframe {
+            last_kf_index = i as u64 + 1;
+        }
+        let frames_since_kf = (i as u64 + 1) - last_kf_index;
+        let granule = (last_kf_index << kfgshift) | frames_since_kf;
+        let is_eos = i == frame_pkts.len() - 1;
+        write_ogg_page(&mut ogg, serial, seq, granule, &[&p.data], false, is_eos);
+        seq += 1;
+    }
+
+    std::fs::write("/tmp/oxideav_moving_pattern.ogv", &ogg).expect("write ogv");
+    let _ = std::fs::remove_file("/tmp/oxideav_moving_pattern_check.yuv");
+
+    let status = std::process::Command::new("/usr/bin/ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            "/tmp/oxideav_moving_pattern.ogv",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            "/tmp/oxideav_moving_pattern_check.yuv",
+        ])
+        .status()
+        .expect("run ffmpeg");
+    assert!(status.success(), "ffmpeg failed to decode moving pattern");
+
+    let decoded = std::fs::read("/tmp/oxideav_moving_pattern_check.yuv").expect("read yuv");
+    let frame_size = 64 * 64 + 2 * 32 * 32;
+    // ffmpeg output must contain the same number of frames as we emitted.
+    let n_frames_out = decoded.len() / frame_size;
+    assert_eq!(
+        n_frames_out,
+        frames.len(),
+        "ffmpeg decoded {n_frames_out} frames, expected {}",
+        frames.len()
+    );
+    eprintln!(
+        "ffmpeg interop: {} frames decoded from {} byte Ogg",
+        n_frames_out,
+        ogg.len()
+    );
 }
 
 // --- minimal Ogg page writer ---------------------------------------------
