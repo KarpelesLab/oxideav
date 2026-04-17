@@ -14,7 +14,8 @@ use std::io::Read;
 
 use oxideav_container::{Demuxer, Muxer, ReadSeek, WriteSeek};
 use oxideav_core::{
-    CodecId, CodecParameters, Error, MediaType, Packet, Result, SampleFormat, StreamInfo, TimeBase,
+    AttachedPicture, CodecId, CodecParameters, Error, MediaType, Packet, PictureType, Result,
+    SampleFormat, StreamInfo, TimeBase,
 };
 
 use crate::frame::{parse_frame_header, FrameHeader};
@@ -49,7 +50,9 @@ fn probe(p: &oxideav_container::ProbeData) -> u8 {
 // --- Demuxer ---------------------------------------------------------------
 
 fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
-    skip_id3v2_if_present(&mut input)?;
+    let mut metadata: Vec<(String, String)> = Vec::new();
+    let mut pictures: Vec<AttachedPicture> = Vec::new();
+    read_id3v2_if_present(&mut input, &mut metadata, &mut pictures)?;
 
     let mut magic = [0u8; 4];
     input.read_exact(&mut magic)?;
@@ -59,7 +62,6 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
 
     let mut extradata = Vec::new();
     let mut streaminfo: Option<Si> = None;
-    let mut metadata: Vec<(String, String)> = Vec::new();
     loop {
         let mut hdr = [0u8; 4];
         input.read_exact(&mut hdr)?;
@@ -71,6 +73,11 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         }
         if parsed.block_type == BlockType::VorbisComment {
             parse_vorbis_comment(&payload, &mut metadata);
+        }
+        if parsed.block_type == BlockType::Picture {
+            if let Some(pic) = parse_flac_picture_block(&payload) {
+                pictures.push(pic);
+            }
         }
         extradata.extend_from_slice(&hdr);
         extradata.extend_from_slice(&payload);
@@ -125,8 +132,57 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         scan: FrameScanner::new(info.min_block_size as u32),
         eof: false,
         metadata,
+        pictures,
         duration_micros,
     }))
+}
+
+/// Parse a FLAC `METADATA_BLOCK_PICTURE` payload (block type 6). The
+/// wire format is shared with the base64 Vorbis-comment variant; the
+/// only difference is that the Vorbis version is base64-wrapped.
+fn parse_flac_picture_block(buf: &[u8]) -> Option<AttachedPicture> {
+    let mut i = 0usize;
+    fn read_u32(buf: &[u8], i: &mut usize) -> Option<u32> {
+        if *i + 4 > buf.len() {
+            return None;
+        }
+        let v = u32::from_be_bytes([buf[*i], buf[*i + 1], buf[*i + 2], buf[*i + 3]]);
+        *i += 4;
+        Some(v)
+    }
+    let type_raw = read_u32(buf, &mut i)?;
+    let mime_len = read_u32(buf, &mut i)? as usize;
+    if i + mime_len > buf.len() {
+        return None;
+    }
+    let mime_type = std::str::from_utf8(&buf[i..i + mime_len])
+        .unwrap_or("")
+        .to_string();
+    i += mime_len;
+    let desc_len = read_u32(buf, &mut i)? as usize;
+    if i + desc_len > buf.len() {
+        return None;
+    }
+    let description = std::str::from_utf8(&buf[i..i + desc_len])
+        .unwrap_or("")
+        .to_string();
+    i += desc_len;
+    // Width, height, depth, colour count — skip: 4 × u32.
+    if i + 16 > buf.len() {
+        return None;
+    }
+    i += 16;
+    let data_len = read_u32(buf, &mut i)? as usize;
+    if i + data_len > buf.len() {
+        return None;
+    }
+    let data = buf[i..i + data_len].to_vec();
+    Some(AttachedPicture {
+        mime_type,
+        picture_type: PictureType::from_u8((type_raw & 0xFF) as u8),
+        description,
+        data,
+    })
 }
 
 /// Parse a Vorbis-comment block payload (FLAC block type 4 shares the
@@ -178,10 +234,16 @@ fn parse_vorbis_comment(buf: &[u8], out: &mut Vec<(String, String)>) {
     }
 }
 
-/// If the file begins with an ID3v2 tag, advance past it. Many FLAC files in
-/// the wild have one even though the FLAC spec does not technically require
-/// support.
-fn skip_id3v2_if_present(input: &mut Box<dyn ReadSeek>) -> Result<()> {
+/// If the file begins with an ID3v2 tag, parse it and advance past
+/// it. Many FLAC files in the wild have one even though the FLAC spec
+/// does not require support. The parsed metadata/pictures are merged
+/// into the caller's accumulators; FLAC's own Vorbis-comment and
+/// PICTURE blocks later take precedence for duplicate keys.
+fn read_id3v2_if_present(
+    input: &mut Box<dyn ReadSeek>,
+    metadata: &mut Vec<(String, String)>,
+    pictures: &mut Vec<AttachedPicture>,
+) -> Result<()> {
     let mut head = [0u8; 10];
     let n = read_up_to(input, &mut head)?;
     if n < 10 || &head[0..3] != b"ID3" {
@@ -189,12 +251,31 @@ fn skip_id3v2_if_present(input: &mut Box<dyn ReadSeek>) -> Result<()> {
         input.seek(std::io::SeekFrom::Current(-(n as i64)))?;
         return Ok(());
     }
+    let flags = head[5];
     let size = ((head[6] as u32) << 21)
         | ((head[7] as u32) << 14)
         | ((head[8] as u32) << 7)
         | (head[9] as u32);
-    let mut skip = vec![0u8; size as usize];
-    input.read_exact(&mut skip)?;
+    let footer = if flags & 0x10 != 0 { 10 } else { 0 };
+    let mut body = vec![0u8; size as usize];
+    if input.read_exact(&mut body).is_err() {
+        if footer > 0 {
+            input.seek(std::io::SeekFrom::Current(footer as i64))?;
+        }
+        return Ok(());
+    }
+    let mut full = Vec::with_capacity(10 + body.len());
+    full.extend_from_slice(&head);
+    full.extend_from_slice(&body);
+    if let Ok((tag, _)) = oxideav_id3::parse_tag(&full) {
+        for (k, v) in oxideav_id3::to_key_value_pairs(&tag) {
+            metadata.push((k, v));
+        }
+        pictures.extend(oxideav_id3::attached_pictures(&tag));
+    }
+    if footer > 0 {
+        input.seek(std::io::SeekFrom::Current(footer as i64))?;
+    }
     Ok(())
 }
 
@@ -217,6 +298,7 @@ struct FlacDemuxer {
     scan: FrameScanner,
     eof: bool,
     metadata: Vec<(String, String)>,
+    pictures: Vec<AttachedPicture>,
     duration_micros: i64,
 }
 
@@ -370,6 +452,10 @@ impl Demuxer for FlacDemuxer {
 
     fn metadata(&self) -> &[(String, String)] {
         &self.metadata
+    }
+
+    fn attached_pictures(&self) -> &[AttachedPicture] {
+        &self.pictures
     }
 
     fn duration_micros(&self) -> Option<i64> {

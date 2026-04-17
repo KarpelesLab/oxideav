@@ -46,6 +46,15 @@ pub trait Demuxer: Send {
     fn duration_micros(&self) -> Option<i64> {
         None
     }
+
+    /// Attached pictures (cover art, artist photos, ...) embedded in
+    /// the container. Returns an empty slice (the default) when the
+    /// container carries none or doesn't support them. Containers that
+    /// do — ID3v2 on MP3, `METADATA_BLOCK_PICTURE` on FLAC, `covr`
+    /// atoms on MP4, etc. — override this to expose the images.
+    fn attached_pictures(&self) -> &[oxideav_core::AttachedPicture] {
+        &[]
+    }
 }
 
 /// Writes packets into a container.

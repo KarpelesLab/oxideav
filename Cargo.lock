@@ -547,6 +547,7 @@ dependencies = [
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
+ "oxideav-id3",
 ]
 
 [[package]]
@@ -643,6 +644,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxideav-id3"
+version = "0.0.1"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
 name = "oxideav-iff"
 version = "0.0.1"
 dependencies = [
@@ -734,6 +742,7 @@ dependencies = [
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
+ "oxideav-id3",
  "oxideav-mp1",
 ]
 

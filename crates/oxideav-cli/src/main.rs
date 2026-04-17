@@ -248,6 +248,32 @@ fn cmd_probe(
         }
     }
 
+    let pictures = demuxer.attached_pictures();
+    if !pictures.is_empty() {
+        println!("Attached pictures:");
+        for (i, pic) in pictures.iter().enumerate() {
+            let mime = if pic.mime_type.is_empty() {
+                "unknown"
+            } else {
+                pic.mime_type.as_str()
+            };
+            let size = human_bytes(pic.data.len());
+            let desc = if pic.description.is_empty() {
+                String::new()
+            } else {
+                format!("\"{}\"", pic.description)
+            };
+            println!(
+                "  #{}  {:<10}  {:<18}  {:<10}  {}",
+                i + 1,
+                mime,
+                format!("{:?}", pic.picture_type),
+                desc,
+                size
+            );
+        }
+    }
+
     // Container-level duration + bitrate.
     let duration_us = demuxer.duration_micros().or_else(|| {
         // Fall back to longest per-stream duration.
@@ -307,6 +333,21 @@ fn cmd_probe(
         println!();
     }
     Ok(())
+}
+
+/// Pretty-print a byte count as `N B`, `N KB`, or `N MB`. Uses
+/// kilobyte-is-1024 rounding — this is for human display only, not
+/// anything that round-trips.
+fn human_bytes(n: usize) -> String {
+    const KB: usize = 1024;
+    const MB: usize = 1024 * 1024;
+    if n >= MB {
+        format!("{:.1} MB", (n as f64) / (MB as f64))
+    } else if n >= KB {
+        format!("{} KB", n / KB)
+    } else {
+        format!("{} B", n)
+    }
 }
 
 /// Format microseconds as `HH:MM:SS.cc` (ffprobe-compatible).

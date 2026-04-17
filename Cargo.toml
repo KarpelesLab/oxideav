@@ -31,6 +31,7 @@ members = [
     "crates/oxideav-mp1",
     "crates/oxideav-mp2",
     "crates/oxideav-mp3",
+    "crates/oxideav-id3",
     "crates/oxideav-aac",
     "crates/oxideav-celt",
     "crates/oxideav-g711",
@@ -98,6 +99,7 @@ oxideav-s3m = { path = "crates/oxideav-s3m", version = "0.0.1" }
 oxideav-mp1 = { path = "crates/oxideav-mp1", version = "0.0.1" }
 oxideav-mp2 = { path = "crates/oxideav-mp2", version = "0.0.1" }
 oxideav-mp3 = { path = "crates/oxideav-mp3", version = "0.0.1" }
+oxideav-id3 = { path = "crates/oxideav-id3", version = "0.0.1" }
 oxideav-aac = { path = "crates/oxideav-aac", version = "0.0.1" }
 oxideav-celt = { path = "crates/oxideav-celt", version = "0.0.1" }
 oxideav-g7231 = { path = "crates/oxideav-g7231", version = "0.0.1" }

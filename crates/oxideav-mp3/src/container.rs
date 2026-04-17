@@ -22,7 +22,8 @@ use std::io::{Read, Seek, SeekFrom};
 
 use oxideav_container::{ContainerRegistry, Demuxer, ProbeData, ReadSeek};
 use oxideav_core::{
-    CodecId, CodecParameters, Error, MediaType, Packet, Result, SampleFormat, StreamInfo, TimeBase,
+    AttachedPicture, CodecId, CodecParameters, Error, MediaType, Packet, Result, SampleFormat,
+    StreamInfo, TimeBase,
 };
 
 use crate::frame::parse_frame_header_any_layer;
@@ -73,7 +74,7 @@ fn probe(p: &ProbeData) -> u8 {
 }
 
 fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
-    skip_id3v2_if_present(&mut input)?;
+    let (mut metadata, mut pictures) = read_id3v2_if_present(&mut input)?;
     let first_offset = input.stream_position()?;
     let (header_bytes, sync_off) = find_first_frame(&mut input)?;
     let hdr = parse_frame_header_any_layer(&header_bytes)?;
@@ -102,25 +103,46 @@ fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let frame_start = first_offset + sync_off as u64;
     input.seek(SeekFrom::Start(frame_start))?;
 
+    // Look for an ID3v1 trailer. Many files pair ID3v2 (rich tag at
+    // the head) with ID3v1 (short fallback tag in the last 128
+    // bytes); we merge any v1 fields that v2 didn't already supply.
+    if let Some(v1_pairs) = try_read_id3v1(&mut input, frame_start)? {
+        for (k, v) in v1_pairs {
+            if !metadata.iter().any(|(ek, _)| *ek == k) {
+                metadata.push((k, v));
+            }
+        }
+    }
+
+    // Reposition cursor at the first audio frame; the v1 probe
+    // seeks to the end of file.
+    input.seek(SeekFrom::Start(frame_start))?;
+
+    let _ = &mut pictures;
     Ok(Box::new(Mp3Demuxer {
         input,
         stream,
         time_base,
         samples_per_frame: hdr.samples_per_frame() as i64,
         next_pts: 0,
+        metadata,
+        pictures,
     }))
 }
 
-/// Advance past an ID3v2 tag header at offset 0 if present. ID3v2
-/// header is 10 bytes: `ID3` magic + version (2) + flags (1) + 4 bytes
-/// of synchsafe size (7 bits per byte). Footer extends size by another
-/// 10 bytes when bit 4 of flags is set.
-fn skip_id3v2_if_present(input: &mut Box<dyn ReadSeek>) -> Result<()> {
+/// Read an ID3v2 tag header at offset 0 if present, parse it, and
+/// advance past it. Returns `(metadata_pairs, pictures)`; both will be
+/// empty when no tag is present. If the parse fails (bad frame size,
+/// truncated tag), falls back to blindly skipping past the tag so
+/// playback still works.
+fn read_id3v2_if_present(
+    input: &mut Box<dyn ReadSeek>,
+) -> Result<(Vec<(String, String)>, Vec<AttachedPicture>)> {
     let mut head = [0u8; 10];
     let n = read_up_to(input, &mut head)?;
     if n < 10 || &head[0..3] != b"ID3" {
         input.seek(SeekFrom::Current(-(n as i64)))?;
-        return Ok(());
+        return Ok((Vec::new(), Vec::new()));
     }
     let flags = head[5];
     let size = ((head[6] as u32) << 21)
@@ -128,8 +150,59 @@ fn skip_id3v2_if_present(input: &mut Box<dyn ReadSeek>) -> Result<()> {
         | ((head[8] as u32) << 7)
         | (head[9] as u32);
     let footer = if flags & 0x10 != 0 { 10 } else { 0 };
-    input.seek(SeekFrom::Current((size + footer) as i64))?;
-    Ok(())
+    // Read the full tag body so we can feed it to the parser. We
+    // already consumed the 10-byte header.
+    let mut body = vec![0u8; size as usize];
+    if input.read_exact(&mut body).is_err() {
+        // Truncated tag — skip what we can and return empty.
+        input.seek(SeekFrom::Current(footer as i64))?;
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut full = Vec::with_capacity(10 + body.len());
+    full.extend_from_slice(&head);
+    full.extend_from_slice(&body);
+    let (metadata, pictures) = match oxideav_id3::parse_tag(&full) {
+        Ok((tag, _)) => (
+            oxideav_id3::to_key_value_pairs(&tag),
+            oxideav_id3::attached_pictures(&tag),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    // Skip the footer (body was already consumed by read_exact).
+    if footer > 0 {
+        input.seek(SeekFrom::Current(footer as i64))?;
+    }
+    Ok((metadata, pictures))
+}
+
+/// Look for an ID3v1 trailer by seeking to the end of the stream and
+/// reading the last 128 bytes. Returns the parsed fields as key/value
+/// pairs (ready to merge into the v2 metadata list) or `None` when no
+/// trailer is present. Leaves the cursor at end-of-file; the caller
+/// must reposition.
+fn try_read_id3v1(
+    input: &mut Box<dyn ReadSeek>,
+    min_safe_pos: u64,
+) -> Result<Option<Vec<(String, String)>>> {
+    let end = input.seek(SeekFrom::End(0))?;
+    if end < 128 {
+        return Ok(None);
+    }
+    let tag_start = end - 128;
+    // Defensive: if audio starts after where the v1 tag would begin,
+    // the file is pathologically small or malformed — skip.
+    if tag_start < min_safe_pos {
+        return Ok(None);
+    }
+    input.seek(SeekFrom::Start(tag_start))?;
+    let mut buf = [0u8; 128];
+    if input.read_exact(&mut buf).is_err() {
+        return Ok(None);
+    }
+    match oxideav_id3::parse_id3v1(&buf) {
+        Some(tag) => Ok(Some(oxideav_id3::to_key_value_pairs(&tag))),
+        None => Ok(None),
+    }
 }
 
 /// Scan up to `MAX_HEADER_SCAN` bytes from the current position looking
@@ -176,6 +249,11 @@ struct Mp3Demuxer {
     samples_per_frame: i64,
     /// Output PTS in samples (advances by samples_per_frame per emitted frame).
     next_pts: i64,
+    /// Container-level metadata built from an ID3v2 tag at the head,
+    /// optionally merged with an ID3v1 trailer.
+    metadata: Vec<(String, String)>,
+    /// Attached pictures (cover art) from APIC/PIC frames.
+    pictures: Vec<AttachedPicture>,
 }
 
 impl Demuxer for Mp3Demuxer {
@@ -185,6 +263,14 @@ impl Demuxer for Mp3Demuxer {
 
     fn streams(&self) -> &[StreamInfo] {
         std::slice::from_ref(&self.stream)
+    }
+
+    fn metadata(&self) -> &[(String, String)] {
+        &self.metadata
+    }
+
+    fn attached_pictures(&self) -> &[AttachedPicture] {
+        &self.pictures
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
