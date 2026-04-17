@@ -51,10 +51,11 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
         .with_lossy(true)
         .with_intra_only(true)
         .with_max_size(4096, 4096);
-    reg.register_decoder_impl(
+    reg.register_both(
         CodecId::new(VIDEO_CODEC_ID_STR),
         v_caps,
         video::make_decoder,
+        video::make_encoder,
     );
 
     let a_caps = CodecCapabilities::audio("adpcm_ima_amv_sw")

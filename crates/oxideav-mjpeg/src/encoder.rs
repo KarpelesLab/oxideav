@@ -122,7 +122,13 @@ impl Encoder for MjpegEncoder {
 
 // ---- Encoding ------------------------------------------------------------
 
-fn encode_jpeg(frame: &VideoFrame, quality: u8) -> Result<Vec<u8>> {
+/// Encode a single `VideoFrame` (YUV 4:4:4 / 4:2:2 / 4:2:0) as a complete,
+/// self-contained baseline JPEG byte stream (`FFD8 … FFD9`). `quality` is
+/// the libjpeg-style 1..=100 factor. Exposed publicly so sibling crates
+/// (e.g. `oxideav-amv`, which wraps the same bitstream with a custom
+/// container-level header) can reuse the encoder without going through the
+/// `Encoder` trait's stateful packet/frame plumbing.
+pub fn encode_jpeg(frame: &VideoFrame, quality: u8) -> Result<Vec<u8>> {
     let width = frame.width as usize;
     let height = frame.height as usize;
     let (h_factor, v_factor) = match frame.format {

@@ -1,4 +1,4 @@
-//! AMV video decoder.
+//! AMV video decoder + encoder.
 //!
 //! AMV stores each frame as a stripped-down JPEG that begins with `FFD8`
 //! (SOI), continues with raw entropy-coded data, and ends with `FFD9` (EOI).
@@ -6,18 +6,29 @@
 //! decoder is expected to know they're the Annex K standard tables for a
 //! 4:2:0 baseline JPEG with whatever width/height the container reported.
 //!
-//! Strategy: synthesise a real baseline JPEG by sandwiching the AMV entropy
-//! payload between a hand-built header and the original `FFD9`, then feed
-//! the result to the standard `oxideav-mjpeg` decoder. After decode, flip
-//! the frame vertically — AMV stores the picture upside-down on disk (the
-//! one and only AMV-specific line in ffmpeg's `mjpegdec.c`).
+//! Decode strategy: synthesise a real baseline JPEG by sandwiching the AMV
+//! entropy payload between a hand-built header and the original `FFD9`, then
+//! feed the result to the standard `oxideav-mjpeg` decoder. After decode,
+//! flip the frame vertically — AMV stores the picture upside-down on disk
+//! (the one and only AMV-specific line in ffmpeg's `mjpegdec.c`).
+//!
+//! Encode strategy: vertically flip the input YUV420P frame's planes, run
+//! the standard `oxideav-mjpeg` encoder with its default Annex-K tables at
+//! Q50 (the tables the AMV decoder expects), then strip the header segments
+//! (JFIF APP0, DQT, DHT, SOF0, SOS) from the emitted JPEG so only
+//! `FFD8` + entropy scan + `FFD9` remains. That stripped blob is exactly
+//! one AMV `00dc` video-chunk payload.
 
-use oxideav_codec::Decoder;
+use std::collections::VecDeque;
+
+use oxideav_codec::{Decoder, Encoder};
 use oxideav_core::{
-    CodecId, CodecParameters, Error, Frame, Packet, PixelFormat, Result, VideoFrame,
+    CodecId, CodecParameters, Error, Frame, MediaType, Packet, PixelFormat, Result, TimeBase,
+    VideoFrame,
 };
 
 use oxideav_mjpeg::decoder::make_decoder as make_mjpeg_decoder;
+use oxideav_mjpeg::encoder::encode_jpeg;
 use oxideav_mjpeg::jpeg::huffman::{
     STD_AC_CHROMA_BITS, STD_AC_CHROMA_VALS, STD_AC_LUMA_BITS, STD_AC_LUMA_VALS, STD_DC_CHROMA_BITS,
     STD_DC_CHROMA_VALS, STD_DC_LUMA_BITS, STD_DC_LUMA_VALS,
@@ -256,6 +267,245 @@ fn flip_vertically(vf: &mut VideoFrame) {
             bot -= 1;
         }
     }
+}
+
+// ---- Encoder -------------------------------------------------------------
+
+/// Build an AMV video encoder. Accepts YUV420P input at the configured
+/// resolution; each received `VideoFrame` is emitted as exactly one packet
+/// whose payload is the AMV `00dc` chunk body (`FFD8` + raw entropy + `FFD9`,
+/// no JPEG header segments).
+///
+/// Internally we call [`encode_jpeg`] at JPEG quality 50 — Q50 is the fixed
+/// point of `scale_for_quality` and therefore emits the unscaled Annex K
+/// "standard" tables, which are exactly the tables the AMV *decoder*
+/// synthesises when it rebuilds the header for each chunk. Using any other
+/// quality factor would produce scaled quant tables that the decoder's
+/// hand-rolled header can't recover, destroying the roundtrip. That's a
+/// protocol-level constraint of AMV, not a knob we expose.
+///
+/// Real-world AMV files from cheap MP3/MP4 players also use Q50 Annex K
+/// quant tables — that's the whole reason AMV can get away with dropping
+/// DQT/DHT/SOF/SOS from the wire format in the first place.
+pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
+    let width = params
+        .width
+        .ok_or_else(|| Error::invalid("AMV video encoder: missing width"))?;
+    let height = params
+        .height
+        .ok_or_else(|| Error::invalid("AMV video encoder: missing height"))?;
+    if width == 0 || height == 0 {
+        return Err(Error::invalid("AMV video encoder: zero width/height"));
+    }
+    let pix = params.pixel_format.unwrap_or(PixelFormat::Yuv420P);
+    if pix != PixelFormat::Yuv420P {
+        return Err(Error::unsupported(format!(
+            "AMV video encoder: pixel format {:?} not supported (need Yuv420P)",
+            pix
+        )));
+    }
+
+    let mut output_params = params.clone();
+    output_params.codec_id = CodecId::new(crate::VIDEO_CODEC_ID_STR);
+    output_params.media_type = MediaType::Video;
+    output_params.width = Some(width);
+    output_params.height = Some(height);
+    output_params.pixel_format = Some(PixelFormat::Yuv420P);
+
+    let time_base = params
+        .frame_rate
+        .map_or(TimeBase::new(1, 90_000), |r| TimeBase::new(r.den, r.num));
+
+    Ok(Box::new(AmvVideoEncoder {
+        output_params,
+        width,
+        height,
+        time_base,
+        pending: VecDeque::new(),
+    }))
+}
+
+/// Fixed JPEG quality factor — Q50 emits the unscaled Annex K standard
+/// quant tables, which is what the AMV decoder hard-codes when synthesising
+/// the stripped header back into a real JPEG.
+const AMV_JPEG_QUALITY: u8 = 50;
+
+struct AmvVideoEncoder {
+    output_params: CodecParameters,
+    width: u32,
+    height: u32,
+    time_base: TimeBase,
+    pending: VecDeque<Packet>,
+}
+
+impl Encoder for AmvVideoEncoder {
+    fn codec_id(&self) -> &CodecId {
+        &self.output_params.codec_id
+    }
+
+    fn output_params(&self) -> &CodecParameters {
+        &self.output_params
+    }
+
+    fn send_frame(&mut self, frame: &Frame) -> Result<()> {
+        let Frame::Video(v) = frame else {
+            return Err(Error::invalid("AMV video encoder: video frames only"));
+        };
+        if v.width != self.width || v.height != self.height {
+            return Err(Error::invalid(
+                "AMV video encoder: frame dimensions do not match encoder config",
+            ));
+        }
+        if v.format != PixelFormat::Yuv420P {
+            return Err(Error::invalid(format!(
+                "AMV video encoder: frame format {:?} not supported (need Yuv420P)",
+                v.format
+            )));
+        }
+
+        // Clone + flip vertically so the JPEG bitstream carries the
+        // upside-down picture AMV stores on disk. The decoder flips it
+        // back on output.
+        let mut flipped = v.clone();
+        flip_vertically(&mut flipped);
+
+        let jpeg = encode_jpeg(&flipped, AMV_JPEG_QUALITY)?;
+        let amv_payload = strip_jpeg_headers(&jpeg)?;
+        let mut out = Packet::new(0, self.time_base, amv_payload);
+        out.pts = v.pts;
+        out.dts = v.pts;
+        out.flags.keyframe = true;
+        self.pending.push_back(out);
+        Ok(())
+    }
+
+    fn receive_packet(&mut self) -> Result<Packet> {
+        self.pending.pop_front().ok_or(Error::NeedMore)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        // Stateless encoder: nothing buffered internally, nothing to drain.
+        Ok(())
+    }
+}
+
+/// Walk a standalone baseline JPEG and strip every header segment the AMV
+/// decoder knows how to reconstruct from the container (JFIF APP0, DQT, DHT,
+/// SOF0, DRI, SOS). Returns a buffer shaped like an AMV frame envelope:
+/// `FF D8` + the raw entropy scan + `FF D9`.
+///
+/// Segment walker follows the standard Annex B rules: each marker is `FF xx`;
+/// "stand-alone" markers (SOI / EOI / RSTn) carry no payload; all other
+/// markers are length-prefixed (big-endian u16 including the length bytes
+/// themselves); the entropy scan begins immediately after the SOS payload
+/// and runs up to the next non-stuffed, non-RST marker.
+fn strip_jpeg_headers(jpeg: &[u8]) -> Result<Vec<u8>> {
+    if jpeg.len() < 4 || jpeg[0] != 0xFF || jpeg[1] != markers::SOI {
+        return Err(Error::invalid("AMV video encoder: MJPEG output missing SOI"));
+    }
+    let mut out = Vec::with_capacity(jpeg.len());
+    out.push(0xFF);
+    out.push(markers::SOI);
+
+    let mut i = 2usize;
+    let mut scan_started = false;
+    while i < jpeg.len() {
+        if jpeg[i] != 0xFF {
+            return Err(Error::invalid(
+                "AMV video encoder: MJPEG output not marker-aligned",
+            ));
+        }
+        // Skip any 0xFF fill bytes between markers.
+        while i < jpeg.len() && jpeg[i] == 0xFF {
+            i += 1;
+        }
+        if i >= jpeg.len() {
+            break;
+        }
+        let marker = jpeg[i];
+        i += 1;
+
+        match marker {
+            // 0x00 after 0xFF is a stuffed zero; shouldn't appear outside an
+            // entropy scan. Treat defensively as error.
+            0x00 => {
+                return Err(Error::invalid(
+                    "AMV video encoder: unexpected 0xFF 0x00 outside entropy scan",
+                ));
+            }
+            markers::EOI => {
+                out.push(0xFF);
+                out.push(markers::EOI);
+                return Ok(out);
+            }
+            m if markers::is_rst(m) => {
+                // Restart markers belong to the scan; copy them through.
+                if scan_started {
+                    out.push(0xFF);
+                    out.push(m);
+                }
+            }
+            markers::SOS => {
+                // Length-prefixed SOS payload; skip it, then the entropy scan
+                // follows up to the next marker.
+                let (payload_len, body_start) = read_segment_length(jpeg, i)?;
+                let scan_start = body_start + payload_len;
+                // Scan continues until we hit a non-stuffed, non-RST marker.
+                let mut j = scan_start;
+                while j < jpeg.len() {
+                    if jpeg[j] == 0xFF && j + 1 < jpeg.len() {
+                        let nxt = jpeg[j + 1];
+                        if nxt == 0x00 || markers::is_rst(nxt) {
+                            j += 2;
+                            continue;
+                        }
+                        // Real marker — end the scan here.
+                        break;
+                    }
+                    j += 1;
+                }
+                // Copy scan bytes verbatim (stuffed 0x00s, RSTn, everything).
+                out.extend_from_slice(&jpeg[scan_start..j]);
+                scan_started = true;
+                i = j;
+            }
+            _ => {
+                // Any other marker — DQT, DHT, SOF0, APP*, COM, DRI, … —
+                // is length-prefixed. Skip its whole segment without copying.
+                let (payload_len, body_start) = read_segment_length(jpeg, i)?;
+                i = body_start + payload_len;
+            }
+        }
+    }
+    // Missing EOI: emit one defensively so the decoder is happy.
+    out.push(0xFF);
+    out.push(markers::EOI);
+    Ok(out)
+}
+
+/// Read a two-byte big-endian segment length at `i` (pointing at the first
+/// length byte). Returns `(payload_bytes_after_length, body_start_offset)`
+/// where body_start_offset is `i + 2`.
+fn read_segment_length(jpeg: &[u8], i: usize) -> Result<(usize, usize)> {
+    if i + 2 > jpeg.len() {
+        return Err(Error::invalid(
+            "AMV video encoder: truncated JPEG segment length",
+        ));
+    }
+    let declared = u16::from_be_bytes([jpeg[i], jpeg[i + 1]]) as usize;
+    if declared < 2 {
+        return Err(Error::invalid(
+            "AMV video encoder: invalid JPEG segment length",
+        ));
+    }
+    let payload_len = declared - 2;
+    let body_start = i + 2;
+    if body_start + payload_len > jpeg.len() {
+        return Err(Error::invalid(
+            "AMV video encoder: JPEG segment length overruns buffer",
+        ));
+    }
+    Ok((payload_len, body_start))
 }
 
 #[cfg(test)]
