@@ -312,6 +312,109 @@ impl OggDemuxer {
         let _ = self.input.seek(SeekFrom::Start(saved_pos));
     }
 
+    /// Starting at byte offset `start`, scan forward up to `limit` for the
+    /// next Ogg page whose bitstream_serial_number equals `wanted_serial`.
+    /// Returns `Some((page_offset, granule_position))` on success, or
+    /// `None` if no such page is found in the window. Only the page header
+    /// and segment table are read — the payload is skipped over by a
+    /// single relative seek, so the cost is O(pages scanned), not O(bytes).
+    fn find_next_page_for_serial(
+        &mut self,
+        start: u64,
+        limit: u64,
+        wanted_serial: u32,
+    ) -> Result<Option<(u64, i64)>> {
+        use std::io::SeekFrom;
+
+        if start >= limit {
+            return Ok(None);
+        }
+
+        // Read a chunk starting at `start` to find the next OggS capture.
+        // Then for each candidate, seek to it, read its header + segment
+        // table, and check the serial.
+        let chunk_size: u64 = 64 * 1024;
+        let mut cursor = start;
+        while cursor < limit {
+            let read_len = chunk_size.min(limit - cursor);
+            self.input.seek(SeekFrom::Start(cursor))?;
+            let mut buf = vec![0u8; read_len as usize];
+            let mut filled = 0usize;
+            while filled < buf.len() {
+                match self.input.read(&mut buf[filled..]) {
+                    Ok(0) => break,
+                    Ok(n) => filled += n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            buf.truncate(filled);
+            if buf.is_empty() {
+                return Ok(None);
+            }
+
+            // Find the next OggS capture in this buffer. We need at least
+            // 27 bytes (header) to parse; if we find a match near the tail
+            // we re-read from that offset to span the chunk boundary.
+            let mut i = 0usize;
+            while i + 4 <= buf.len() {
+                if &buf[i..i + 4] != b"OggS" {
+                    i += 1;
+                    continue;
+                }
+                let page_off = cursor + i as u64;
+
+                // Read the page header + segment table directly from the
+                // input (cheaper than re-reading the whole data payload).
+                self.input.seek(SeekFrom::Start(page_off))?;
+                let mut hdr = [0u8; 27];
+                if self.input.read(&mut hdr)? != 27 {
+                    return Ok(None);
+                }
+                if hdr[0..4] != page::CAPTURE_PATTERN {
+                    // False positive (byte alignment within some payload).
+                    i += 1;
+                    continue;
+                }
+                let serial = u32::from_le_bytes([hdr[14], hdr[15], hdr[16], hdr[17]]);
+                let granule = i64::from_le_bytes([
+                    hdr[6], hdr[7], hdr[8], hdr[9], hdr[10], hdr[11], hdr[12], hdr[13],
+                ]);
+                let n_segs = hdr[26] as usize;
+
+                if serial == wanted_serial && granule >= 0 {
+                    return Ok(Some((page_off, granule)));
+                }
+
+                // Not our stream (or an "indeterminate" granule = -1).
+                // Skip past this page's body to find the next one.
+                let mut lacing = vec![0u8; n_segs];
+                if self.input.read(&mut lacing)? != n_segs {
+                    return Ok(None);
+                }
+                let data_len: u64 = lacing.iter().map(|&v| v as u64).sum();
+                let next_off = page_off + 27 + n_segs as u64 + data_len;
+                if next_off >= limit {
+                    return Ok(None);
+                }
+                // Re-align our scanning cursor to the page end and
+                // re-load the chunk buffer from there on the next pass.
+                cursor = next_off;
+                break;
+            }
+            // If we walked the whole buffer without finding OggS, advance
+            // past it (minus 3 bytes to keep a possible capture that
+            // straddles the boundary).
+            if i + 4 > buf.len() {
+                if buf.len() < 4 {
+                    return Ok(None);
+                }
+                cursor += buf.len() as u64 - 3;
+            }
+        }
+        Ok(None)
+    }
+
     /// Drain the next packet from the queued pages, possibly reading more.
     fn drain_next(&mut self) -> Result<Option<Packet>> {
         loop {
@@ -410,6 +513,163 @@ impl Demuxer for OggDemuxer {
             return Ok(p);
         }
         Err(Error::Eof)
+    }
+
+    fn seek_to(&mut self, stream_index: u32, pts: i64) -> Result<i64> {
+        use std::io::SeekFrom;
+
+        if stream_index as usize >= self.streams.len() {
+            return Err(Error::invalid(format!(
+                "Ogg: stream index {stream_index} out of range"
+            )));
+        }
+
+        // Find the serial for the requested stream.
+        let mut wanted_serial: Option<u32> = None;
+        for (serial, state) in &self.state_by_serial {
+            if self.streams[state.public_index].index == stream_index {
+                wanted_serial = Some(*serial);
+                break;
+            }
+        }
+        let wanted_serial = wanted_serial.ok_or_else(|| {
+            Error::unsupported(format!("Ogg: no logical stream for index {stream_index}"))
+        })?;
+
+        // For codecs the demuxer tracks (Vorbis, Opus, FLAC), the stream's
+        // time_base already matches the native granule unit, so pts IS the
+        // target granule. Theora and unknown streams use a microsecond base
+        // and granule translation is codec-specific — reject that until we
+        // grow a per-codec granule_to_pts helper.
+        let codec_id = self.streams[stream_index as usize].params.codec_id.clone();
+        let target_granule = match codec_id.as_str() {
+            "vorbis" | "opus" | "flac" | "speex" => pts,
+            _ => {
+                return Err(Error::unsupported(format!(
+                    "Ogg: seek_to not implemented for codec {}",
+                    codec_id.as_str()
+                )));
+            }
+        };
+
+        // Determine the seekable byte range. `lo` is the current position
+        // of the first page after the BOS/header section isn't known here —
+        // we conservatively start at 0 and scan forward to the first OggS.
+        let file_size = {
+            let cur = self.input.stream_position()?;
+            let end = self.input.seek(SeekFrom::End(0))?;
+            self.input.seek(SeekFrom::Start(cur))?;
+            end
+        };
+        if file_size == 0 {
+            return Err(Error::unsupported("Ogg: empty input"));
+        }
+
+        // Bisection state.
+        let mut lo: u64 = 0;
+        let mut hi: u64 = file_size;
+        // Best-so-far: the last page with granule <= target_granule that
+        // belongs to the requested stream. Tuple of (page_offset, granule).
+        let mut landed: Option<(u64, i64)> = None;
+        let threshold: u64 = 64 * 1024;
+
+        // Upper bound on iterations: log2(file_size) + a handful for the
+        // linear tail when the range shrinks below `threshold`.
+        let max_iters: u32 = 64;
+        let mut iters: u32 = 0;
+
+        while lo < hi && iters < max_iters {
+            iters += 1;
+            let mid = lo + (hi - lo) / 2;
+            // Scan forward from `mid` for the next OggS page belonging to
+            // the target stream.
+            let scan_limit: u64 = 64 * 1024;
+            let scan_end = (mid + scan_limit).min(file_size);
+            let (page_off, granule) =
+                match self.find_next_page_for_serial(mid, scan_end, wanted_serial)? {
+                    Some(v) => v,
+                    None => {
+                        // No matching page in this window — give up on the
+                        // upper half and tighten `hi`.
+                        hi = mid;
+                        continue;
+                    }
+                };
+
+            if granule <= target_granule {
+                // This page is at or before target — remember it, try
+                // later offsets.
+                if landed.map(|(_, g)| granule >= g).unwrap_or(true) {
+                    landed = Some((page_off, granule));
+                }
+                // Advance past this page's header to avoid re-landing on
+                // the same page forever.
+                lo = page_off + 1;
+            } else {
+                // granule > target — search the lower half.
+                hi = page_off;
+            }
+
+            // Avoid pathological ping-pong on very small ranges.
+            if hi.saturating_sub(lo) < threshold {
+                break;
+            }
+        }
+
+        // After bisection, do a bounded linear scan from `lo` toward `hi`
+        // to tighten `landed` — this handles the final few pages inside
+        // the threshold window without more bisection iterations.
+        if let Some((_, _)) = landed {
+            let mut cursor = landed.map(|(off, _)| off + 1).unwrap_or(lo);
+            let scan_end = hi.min(cursor + threshold * 2);
+            while cursor < scan_end {
+                match self.find_next_page_for_serial(cursor, scan_end, wanted_serial)? {
+                    Some((off, g)) => {
+                        if g > target_granule {
+                            break;
+                        }
+                        if landed.map(|(_, lg)| g >= lg).unwrap_or(true) {
+                            landed = Some((off, g));
+                        }
+                        cursor = off + 1;
+                    }
+                    None => break,
+                }
+            }
+        } else {
+            // Bisection never found a page <= target. Try scanning from
+            // the start one time — this covers files where every page's
+            // granule exceeds the target (e.g., seek to pts 0 on a stream
+            // whose first page already has granule > 0).
+            if let Some((off, g)) = self.find_next_page_for_serial(0, file_size, wanted_serial)? {
+                if g <= target_granule {
+                    landed = Some((off, g));
+                } else {
+                    // Even the earliest page is past target — seek to it
+                    // anyway; it's the best we can do.
+                    landed = Some((off, g));
+                }
+            }
+        }
+
+        let (landed_off, landed_granule) = landed.ok_or_else(|| {
+            Error::unsupported(format!(
+                "Ogg: no seekable page found for stream {stream_index}"
+            ))
+        })?;
+
+        // Seek the underlying input to the page boundary and flush all
+        // buffered demuxer state so playback resumes cleanly.
+        self.input.seek(SeekFrom::Start(landed_off))?;
+        self.page_queue.clear();
+        self.out_queue.clear();
+        for state in self.state_by_serial.values_mut() {
+            state.pending.clear();
+            state.granule_seen = 0;
+        }
+        self.eof_reached = false;
+
+        Ok(landed_granule)
     }
 
     fn metadata(&self) -> &[(String, String)] {
