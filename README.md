@@ -17,70 +17,36 @@ A **100% pure Rust** media transcoding and streaming framework. No C libraries, 
 
 ## Workspace layout
 
-```
-oxideav/
-├── crates/
-│   ├── oxideav-core/         # primitives: Rational, Timestamp, Packet, Frame, formats, ExecutionContext
-│   ├── oxideav-codec/        # codec traits: Encoder, Decoder, CodecId, registry glue
-│   ├── oxideav-container/    # container traits: Demuxer, Muxer, registry glue
-│   ├── oxideav-pipeline/     # pipeline composition (source → transforms → sink)
-│   ├── oxideav-source/       # generic I/O: SourceRegistry, file:// driver, BufferedSource
-│   ├── oxideav-http/         # HTTP/HTTPS source via ureq + rustls (Range requests)
-│   ├── oxideav-audio-filter/ # audio processing: Volume, NoiseGate, Echo, Resample, Spectrogram
-│   ├── oxideav-pixfmt/       # pixel format conversion: RGB/YUV/Gray/Pal8, dither, palette gen
-│   ├── oxideav-job/          # JSON transcode job graph + pipelined multithreaded executor
-│   │
-│   ├── oxideav-basic/        # simple / standard formats: PCM variants, WAV, slin
-│   │
-│   ├── oxideav-ogg/          # Ogg container (RFC 3533)
-│   ├── oxideav-vorbis/       # Vorbis audio (decoder + encoder)
-│   ├── oxideav-opus/         # Opus audio (SILK NB/MB/WB 10+20ms mono+stereo; 40/60ms SILK; CELT stereo)
-│   ├── oxideav-flac/         # FLAC native container + codec (decode + encode)
-│   ├── oxideav-mkv/          # Matroska / WebM container (EBML), demux + mux
-│   ├── oxideav-mp4/          # MP4 / ISO BMFF, demux + mux
-│   ├── oxideav-avi/          # AVI container, demux + mux
-│   ├── oxideav-iff/          # Amiga IFF / 8SVX
-│   ├── oxideav-mod/          # ProTracker MOD player
-│   ├── oxideav-s3m/          # Scream Tracker 3 player (stereo + SCx/SDx/SBx)
-│   ├── oxideav-amv/          # AMV container + video + IMA-ADPCM audio (decode + encode)
-│   ├── oxideav-webp/         # WebP image (VP8 lossy + VP8L lossless, decode + encode + animation)
-│   ├── oxideav-png/          # PNG + APNG decoder + encoder
-│   ├── oxideav-gif/          # GIF decoder + encoder (LZW, animation)
-│   │
-│   ├── oxideav-mp1/          # MPEG-1 Audio Layer I decoder + encoder
-│   ├── oxideav-mp2/          # MPEG-1 Audio Layer II decoder + encoder
-│   ├── oxideav-mp3/          # MP3 decoder + encoder
-│   ├── oxideav-aac/          # AAC-LC decoder + encoder
-│   ├── oxideav-celt/         # CELT decoder + encoder (standalone Opus high-band)
-│   ├── oxideav-speex/        # Speex decoder (NB + WB) + NB mode-5 encoder
-│   ├── oxideav-gsm/          # GSM 06.10 decoder + encoder
-│   ├── oxideav-g711/         # G.711 μ-law + A-law decoder + encoder (pcm_mulaw / pcm_alaw)
-│   ├── oxideav-g722/         # G.722 wideband ADPCM decoder + encoder (64 kbit/s)
-│   ├── oxideav-g7231/        # G.723.1 decoder + ACELP (5.3k) encoder
-│   ├── oxideav-g728/         # G.728 LD-CELP decoder (machinery real, tables placeholder)
-│   ├── oxideav-g729/         # G.729 CS-ACELP decoder + encoder
-│   │
-│   ├── oxideav-mjpeg/        # MJPEG decoder + encoder + still-JPEG container
-│   ├── oxideav-ffv1/         # FFV1 v3 decoder + encoder
-│   ├── oxideav-mpeg1video/   # MPEG-1 video decoder + encoder
-│   ├── oxideav-mpeg4video/   # MPEG-4 Part 2 decoder + encoder
-│   ├── oxideav-theora/       # Theora decoder + encoder
-│   ├── oxideav-h263/         # H.263 decoder + encoder
-│   ├── oxideav-h264/         # H.264 decoder (baseline I-slice skeleton)
-│   ├── oxideav-h265/         # H.265 header parser
-│   ├── oxideav-vp8/          # VP8 decoder (I + P) + I-frame encoder + IVF container
-│   ├── oxideav-vp9/          # VP9 header parser
-│   ├── oxideav-av1/          # AV1 parse + intra primitives (range decode, DC/V/H pred, 4×4/8×8 DCT)
-│   ├── oxideav-prores/       # Apple ProRes scaffold (decoder/encoder not yet implemented)
-│   ├── oxideav-jpegxl/       # JPEG XL scaffold (decoder/encoder not yet implemented)
-│   ├── oxideav-jpeg2000/     # JPEG 2000 scaffold (decoder/encoder not yet implemented)
-│   ├── oxideav-avif/         # AVIF scaffold (decoder/encoder not yet implemented)
-│   │
-│   ├── oxideav/              # aggregator: re-exports + feature-gated registry
-│   ├── oxideav-cli/          # `oxideav` command-line frontend (list/probe/remux/transcode/run/validate/dry-run)
-│   └── oxideplay/            # reference media player (SDL2 + crossterm TUI)
-└── Cargo.toml                # workspace manifest
-```
+The workspace is a set of Cargo crates under `crates/`, grouped by role:
+
+- **Infrastructure** — `oxideav-core` (primitives: Packet / Frame / Rational /
+  Timestamp / PixelFormat / ExecutionContext), `oxideav-codec` (Decoder /
+  Encoder traits + registry), `oxideav-container` (Demuxer / Muxer traits +
+  registry), `oxideav-pipeline` (source → transforms → sink composition).
+- **I/O** — `oxideav-source` (generic SourceRegistry + file driver +
+  BufferedSource), `oxideav-http` (HTTP/HTTPS driver, opt-in via feature).
+- **Effects + conversions** — `oxideav-audio-filter` (Volume / NoiseGate /
+  Echo / Resample / Spectrogram), `oxideav-pixfmt` (pixel-format conversion
+  matrix + palette generation + dither).
+- **Job graph** — `oxideav-job` (JSON transcode graph + pipelined
+  multithreaded executor).
+- **Containers** — one crate each for `oxideav-ogg` / `-mkv` / `-mp4` /
+  `-avi` / `-iff`. Simple containers (WAV, raw PCM, slin) live inside
+  `oxideav-basic`.
+- **Codec crates** — one crate per codec family; see the
+  [Codecs table](#codecs) below for the per-codec status. Tracker formats
+  (`oxideav-mod`, `oxideav-s3m`) are decoder-only by design. Codec scaffolds
+  that register-but-refuse (ProRes, JPEG XL, JPEG 2000, AVIF) reserve their
+  codec ids so the API surface stays forward-compatible.
+- **Aggregator** — `oxideav` re-exports every enabled crate behind Cargo
+  features. `Registries::with_all_features()` builds a registry covering
+  every format compiled in.
+- **Binaries** — `oxideav-cli` (the `oxideav` CLI: `list` / `probe` /
+  `remux` / `transcode` / `run` / `validate` / `dry-run`) and `oxideplay`
+  (reference SDL2 + TUI player).
+
+Use `cargo run --release -p oxideav-cli -- list` to enumerate the codec
+and container matrix actually compiled into the release binary.
 
 ## Core concepts
 
