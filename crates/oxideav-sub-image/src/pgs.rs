@@ -393,12 +393,10 @@ impl DisplaySet {
                 self.last_canvas = Some((pcs.width, pcs.height));
                 self.pcs = Some(pcs);
             }
-            SEG_WDS => {
-                // We don't clip to the declared windows — parsing is
-                // kept here so that we validate the length is sane.
-                if seg.body.is_empty() {
-                    return Err(Error::invalid("PGS WDS: empty body"));
-                }
+            // We don't clip to the declared windows — only validate that a
+            // body is present at all.
+            SEG_WDS if seg.body.is_empty() => {
+                return Err(Error::invalid("PGS WDS: empty body"));
             }
             SEG_PDS => {
                 parse_pds_into(&seg.body, &mut self.palette)?;

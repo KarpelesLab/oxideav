@@ -286,10 +286,8 @@ fn parse_event_line(line: &str, fmt: &[String]) -> Option<SubtitleCue> {
         match key.as_str() {
             "start" => start_us = parse_ass_timestamp(val).unwrap_or(0),
             "end" => end_us = parse_ass_timestamp(val).unwrap_or(0),
-            "style" => {
-                if !val.is_empty() {
-                    style_ref = Some(val.to_string());
-                }
+            "style" if !val.is_empty() => {
+                style_ref = Some(val.to_string());
             }
             "text" => text = v,
             _ => {}
