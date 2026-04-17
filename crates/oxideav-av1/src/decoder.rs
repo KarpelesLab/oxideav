@@ -14,6 +14,7 @@ use crate::extradata::Av1CodecConfig;
 use crate::frame_header::{parse_frame_header, FrameHeader, FrameType};
 use crate::obu::{iter_obus, ObuType};
 use crate::sequence_header::{parse_sequence_header, SequenceHeader};
+use crate::tile_decode::TileDecoder;
 use crate::tile_group::tile_decode_unsupported;
 
 /// Build the registry-side decoder factory.
@@ -90,17 +91,31 @@ impl Av1Decoder {
                         .ok_or_else(|| Error::invalid("av1: frame_obu before sequence_header"))?;
                     // OBU_FRAME = frame_header_obu() + tile_group_obu(). We
                     // parse the header best-effort.
-                    if let Ok(fh) = parse_frame_header(seq, obu.payload) {
-                        if !matches!(fh.frame_type, FrameType::Key | FrameType::Inter) {
-                            // Other frame types are syntactically supported; no-op.
-                        }
-                        self.last_frame_header = Some(fh);
-                        self.seen_frame = true;
+                    let fh = parse_frame_header(seq, obu.payload)?;
+                    if !matches!(fh.frame_type, FrameType::Key | FrameType::Inter) {
+                        // Other frame types are syntactically supported; no-op.
                     }
-                    // Tile data: out of scope.
-                    return Err(tile_decode_unsupported());
+                    self.last_frame_header = Some(fh.clone());
+                    self.seen_frame = true;
+                    // Hand off to the tile-decode skeleton. Even though it
+                    // can't produce pixels yet, it surfaces a much more
+                    // precise §ref than `tile_decode_unsupported`. Pass an
+                    // empty payload if we couldn't compute the split;
+                    // `TileDecoder::new` will reject it.
+                    let seq_clone = seq.clone();
+                    let tile_payload = obu.payload;
+                    match TileDecoder::new(&seq_clone, &fh, tile_payload)
+                        .and_then(|mut td| td.decode())
+                    {
+                        Ok(_) => {}
+                        Err(Error::Unsupported(s)) => return Err(Error::Unsupported(s)),
+                        Err(e) => return Err(e),
+                    }
                 }
                 ObuType::TileGroup => {
+                    // Without a tile-payload boundary extracted from the
+                    // enclosing OBU_FRAME it's not safe to drive the tile
+                    // decoder here. Surface the historical message.
                     return Err(tile_decode_unsupported());
                 }
                 ObuType::Metadata | ObuType::TileList => {

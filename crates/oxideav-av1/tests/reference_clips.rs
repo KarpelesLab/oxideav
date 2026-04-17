@@ -212,17 +212,24 @@ fn decoder_returns_unsupported_for_tile_decode() {
     let params = CodecParameters::video(CodecId::new(oxideav_av1::CODEC_ID_STR));
     let mut dec = oxideav_av1::make_decoder(&params).expect("build decoder");
     let pkt = Packet::new(0, TimeBase::new(1, 24), obus);
+    // The tile-decode skeleton now surfaces a more precise message —
+    // partition CDFs (§9.4) — before the historical "§5.11 pending" text.
+    // Accept either because the skeleton message is the near-term target
+    // and may be improved as more sub-sections land.
     match dec.send_packet(&pkt) {
         Err(Error::Unsupported(s)) => {
             assert!(
-                s.contains("§5.11"),
-                "Unsupported message should reference §5.11, got: {s}"
+                s.contains("§5.11") || s.contains("§9.4") || s.contains("§7"),
+                "Unsupported message should reference an AV1 spec §, got: {s}"
             );
         }
         other => panic!("expected Unsupported(tile decode), got {other:?}"),
     }
     match dec.receive_frame() {
-        Err(Error::Unsupported(s)) => assert!(s.contains("§5.11")),
+        Err(Error::Unsupported(s)) => assert!(
+            s.contains("§5.11") || s.contains("§9.4") || s.contains("§7"),
+            "msg: {s}"
+        ),
         other => panic!("receive_frame should be Unsupported, got {other:?}"),
     }
 }

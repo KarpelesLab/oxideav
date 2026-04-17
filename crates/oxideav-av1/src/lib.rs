@@ -1,8 +1,9 @@
 //! AV1 (AOMedia Video 1) — pure-Rust parse-only crate for oxideav.
 //!
-//! Status: **parse-only**. Tile decode is the bulk of an AV1 decoder
-//! (~20 KLOC of CDF + transforms + intra/inter prediction + loop
-//! restoration) and is intentionally deferred. What this crate does today:
+//! Status: **parse-only plus tile-decode skeleton**. Full tile decode is
+//! the bulk of an AV1 decoder (~20 KLOC of CDF + transforms + intra/inter
+//! prediction + loop restoration) and lands incrementally. What this
+//! crate does today:
 //!
 //! * Walks the OBU stream (§5.3) and surfaces typed `Obu` values.
 //! * Parses sequence header OBUs (§5.5) — full color config, operating
@@ -14,8 +15,19 @@
 //!   Matroska, including the embedded sequence-header config OBU.
 //! * Registers a `Decoder` factory that ingests OBU streams and exposes
 //!   header-level state via `Av1Decoder::sequence_header()` /
-//!   `last_frame_header()`. Calls to `receive_frame()` deliberately return
-//!   `Error::Unsupported(...)` with precise spec references.
+//!   `last_frame_header()`.
+//! * Ships the core tile-decode primitives:
+//!     - Symbol (range / arithmetic) decoder (§4.10.4 + §9.3).
+//!     - Inverse 4×4 and 8×8 DCT-DCT transforms (§7.7).
+//!     - `DC_PRED` / `V_PRED` / `H_PRED` intra predictors (§7.11.2).
+//!     - A tile-decode skeleton that initialises the symbol decoder,
+//!       computes the superblock grid, and hands back a precise
+//!       `Error::Unsupported` pointing at the next unimplemented clause
+//!       (currently: default CDF tables for partition decode).
+//!
+//! `receive_frame()` still returns `Error::Unsupported(...)` — the
+//! remaining gap is default CDFs + per-block mode / coefficient decode.
+//! Each missing piece surfaces a message that names its §ref.
 //!
 //! Spec references throughout follow the **AV1 Bitstream & Decoding Process
 //! Specification (2019-01-08)**: <https://aomediacodec.github.io/av1-spec/av1-spec.pdf>.
@@ -24,9 +36,13 @@ pub mod bitreader;
 pub mod decoder;
 pub mod extradata;
 pub mod frame_header;
+pub mod intra;
 pub mod obu;
 pub mod sequence_header;
+pub mod symbol;
+pub mod tile_decode;
 pub mod tile_group;
+pub mod transform;
 
 use oxideav_codec::CodecRegistry;
 use oxideav_core::{CodecCapabilities, CodecId};
