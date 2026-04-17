@@ -1,4 +1,6 @@
-//! ITU-T G.723.1 dual-rate (6.3 / 5.3 kbit/s) speech codec — scaffold.
+//! ITU-T G.723.1 dual-rate (6.3 / 5.3 kbit/s) speech codec.
+//!
+//! # Decoder
 //!
 //! What's landed: packet-layout bit reader (LSB-first, per Annex B),
 //! frame-type discriminator (high-rate / low-rate / SID / erasure),
@@ -8,10 +10,27 @@
 //! silence frames at 8 kHz while the MP-MLQ / ACELP synthesis paths are
 //! implemented.
 //!
-//! What's stubbed: LSP-VQ codebook lookup + interpolation, adaptive /
+//! What's still stubbed: LSP-VQ codebook lookup + interpolation, adaptive /
 //! fixed-codebook excitation reconstruction, MP-MLQ pulse decoding, gain
 //! dequantisation, formant / pitch post-filter, and comfort-noise
 //! generation for SID / erased frames.
+//!
+//! # Encoder
+//!
+//! The crate ships an **encoder for the 5.3 kbit/s ACELP rate only**. The
+//! 6.3 kbit/s MP-MLQ rate returns [`Error::Unsupported`] when the caller
+//! requests it via `CodecParameters::bit_rate = Some(6300)` — see
+//! [`encoder::make_encoder`] and the [`encoder`] module docstring for the
+//! full rationale. The ACELP encoder implements the full analysis pipeline
+//! (LPC → LSP → open-loop pitch → closed-loop pitch refinement → 4-pulse
+//! ACELP fixed-codebook search → joint gain quantisation → 158-bit
+//! packing) but uses *simplified, locally-consistent* VQ codebooks rather
+//! than the ITU-T Table 5 / Table 7 codebooks. Bitstreams produced here
+//! therefore round-trip cleanly through the crate's own reference decoder
+//! (see [`encoder::decode_acelp_local`]) but are **not** bit-compatible
+//! with external G.723.1 implementations. Once the full ITU-T codebooks
+//! are ported into the decoder, the encoder's VQ tables can be swapped in
+//! a single patch without touching the analysis pipeline.
 //!
 //! Reference: ITU-T G.723.1 Recommendation (May 2006) and Annex B.
 
@@ -25,6 +44,7 @@
 )]
 
 pub mod bitreader;
+pub mod encoder;
 pub mod header;
 pub mod synthesis;
 pub mod tables;
@@ -46,7 +66,12 @@ pub fn register(reg: &mut CodecRegistry) {
         .with_intra_only(false)
         .with_max_channels(1)
         .with_max_sample_rate(SAMPLE_RATE_HZ);
-    reg.register_decoder_impl(CodecId::new(CODEC_ID_STR), caps, make_decoder);
+    reg.register_both(
+        CodecId::new(CODEC_ID_STR),
+        caps,
+        make_decoder,
+        encoder::make_encoder,
+    );
 }
 
 fn make_decoder(_params: &CodecParameters) -> Result<Box<dyn Decoder>> {
@@ -170,6 +195,7 @@ mod tests {
         let mut reg = CodecRegistry::new();
         register(&mut reg);
         assert!(reg.has_decoder(&CodecId::new(CODEC_ID_STR)));
+        assert!(reg.has_encoder(&CodecId::new(CODEC_ID_STR)));
     }
 
     #[test]
