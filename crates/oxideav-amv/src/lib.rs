@@ -61,10 +61,11 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
         .with_lossy(true)
         .with_max_channels(1)
         .with_max_sample_rate(48_000);
-    reg.register_decoder_impl(
+    reg.register_both(
         CodecId::new(AUDIO_CODEC_ID_STR),
         a_caps,
         audio::make_decoder,
+        audio::make_encoder,
     );
 }
 

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Pure-Rust AMV (Chinese MP3/MP4-player Motion-JPEG + IMA-ADPCM) decoder"
+description = "Pure-Rust AMV (Chinese MP3/MP4-player Motion-JPEG + IMA-ADPCM) decoder + IMA-ADPCM encoder"
 
 [dependencies]
 oxideav-core = { workspace = true }
