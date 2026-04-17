@@ -76,25 +76,25 @@ probe that scores the first 256 KB against its magic bytes. The file
 extension is a tie-breaker hint, not the source of truth — a `.mp4`
 that's actually a WAV opens correctly.
 
-| Container | Demux | Mux | Notes |
-|-----------|:-----:|:---:|-------|
-| WAV       | ✅ | ✅ | LIST/INFO metadata |
-| FLAC      | ✅ | ✅ | VORBIS_COMMENT, streaminfo, PICTURE block |
-| Ogg       | ✅ | ✅ | Vorbis/Opus/Theora/Speex pages + comments |
-| Matroska  | ✅ | ✅ | MKV/MKA/MKS; DocType-aware probe |
-| WebM      | ✅ | ✅ | First-class: separate fourcc, codec whitelist (VP8/VP9/AV1/Vorbis/Opus) |
-| MP4       | ✅ | ✅ | mp4/mov/ismv brands, faststart, iTunes ilst metadata |
-| AVI       | ✅ | ✅ | LIST INFO, avih duration |
-| MP3       | ✅ | ✅ | ID3v2/v1 tags + cover art, Xing/VBRI, frame sync with mid-stream resync |
-| IFF / 8SVX| ✅ | ✅ | Amiga IFF with NAME/AUTH/ANNO/CHRS |
-| IVF       | ✅ | — | VP8 elementary stream container |
-| AMV       | ✅ | — | Chinese MP4 player format (RIFF-like) |
-| WebP      | ✅ | — | RIFF/WEBP (lossy + lossless + animation) |
-| PNG / APNG| ✅ | ✅ | 8 + 16-bit, all color types, APNG animation |
-| GIF       | ✅ | ✅ | GIF87a/GIF89a, LZW, animation + NETSCAPE2.0 loop |
-| JPEG      | ✅ | ✅ | Still-image wrapper around the MJPEG codec |
-| slin      | ✅ | ✅ | Asterisk raw-PCM: .sln/.slin/.sln8..192 |
-| MOD / S3M | ✅ | — | Tracker modules (decode-only by design) |
+| Container | Demux | Mux | Seek | Notes |
+|-----------|:-----:|:---:|:----:|-------|
+| WAV       | ✅ | ✅ | ✅ | LIST/INFO metadata; byte-offset seek |
+| FLAC      | ✅ | ✅ | ✅ | VORBIS_COMMENT, streaminfo, PICTURE block; SEEKTABLE-based seek |
+| Ogg       | ✅ | ✅ | ✅ | Vorbis/Opus/Theora/Speex pages + comments; page-granule bisection |
+| Matroska  | ✅ | ✅ | ✅ | MKV/MKA/MKS; DocType-aware probe; Cues-based seek |
+| WebM      | ✅ | ✅ | ✅ | First-class: separate fourcc, codec whitelist (VP8/VP9/AV1/Vorbis/Opus); inherits Matroska Cues seek |
+| MP4       | ✅ | ✅ | ✅ | mp4/mov/ismv brands, faststart, iTunes ilst metadata; sample-table seek |
+| AVI       | ✅ | ✅ | ✅ | LIST INFO, avih duration; idx1 keyframe-index seek |
+| MP3       | ✅ | ✅ | ✅ | ID3v2/v1 tags + cover art, Xing/VBRI TOC seek (+ CBR fallback), frame sync with mid-stream resync |
+| IFF / 8SVX| ✅ | ✅ | — | Amiga IFF with NAME/AUTH/ANNO/CHRS |
+| IVF       | ✅ | — | — | VP8 elementary stream container |
+| AMV       | ✅ | — | — | Chinese MP4 player format (RIFF-like) |
+| WebP      | ✅ | — | — | RIFF/WEBP (lossy + lossless + animation) |
+| PNG / APNG| ✅ | ✅ | — | 8 + 16-bit, all color types, APNG animation |
+| GIF       | ✅ | ✅ | — | GIF87a/GIF89a, LZW, animation + NETSCAPE2.0 loop |
+| JPEG      | ✅ | ✅ | — | Still-image wrapper around the MJPEG codec |
+| slin      | ✅ | ✅ | — | Asterisk raw-PCM: .sln/.slin/.sln8..192 |
+| MOD / S3M | ✅ | — | — | Tracker modules (decode-only by design) |
 
 Cross-container remux works for any pair whose codecs don't require
 rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
