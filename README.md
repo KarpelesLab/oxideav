@@ -30,11 +30,11 @@ oxideav/
 │   ├── oxideav-pixfmt/       # pixel format conversion: RGB/YUV/Gray/Pal8, dither, palette gen
 │   ├── oxideav-job/          # JSON transcode job graph + pipelined multithreaded executor
 │   │
-│   ├── oxideav-basic/        # simple / standard formats: PCM variants, WAV
+│   ├── oxideav-basic/        # simple / standard formats: PCM variants, WAV, slin
 │   │
 │   ├── oxideav-ogg/          # Ogg container (RFC 3533)
 │   ├── oxideav-vorbis/       # Vorbis audio (decoder + encoder)
-│   ├── oxideav-opus/         # Opus audio (SILK NB/MB/WB 10+20ms + CELT decode, stereo CELT)
+│   ├── oxideav-opus/         # Opus audio (SILK NB/MB/WB 10+20ms mono+stereo; 40/60ms SILK; CELT stereo)
 │   ├── oxideav-flac/         # FLAC native container + codec (decode + encode)
 │   ├── oxideav-mkv/          # Matroska / WebM container (EBML), demux + mux
 │   ├── oxideav-mp4/          # MP4 / ISO BMFF, demux + mux
@@ -43,20 +43,22 @@ oxideav/
 │   ├── oxideav-mod/          # ProTracker MOD player
 │   ├── oxideav-s3m/          # Scream Tracker 3 player (stereo + SCx/SDx/SBx)
 │   ├── oxideav-amv/          # AMV container + video + IMA-ADPCM audio (decode + encode)
-│   ├── oxideav-webp/         # WebP image (VP8 lossy + VP8L lossless + animation)
+│   ├── oxideav-webp/         # WebP image (VP8 lossy + VP8L lossless, decode + encode + animation)
 │   ├── oxideav-png/          # PNG + APNG decoder + encoder
 │   ├── oxideav-gif/          # GIF decoder + encoder (LZW, animation)
 │   │
-│   ├── oxideav-mp1/          # MPEG-1 Audio Layer I decoder
+│   ├── oxideav-mp1/          # MPEG-1 Audio Layer I decoder + encoder
 │   ├── oxideav-mp2/          # MPEG-1 Audio Layer II decoder + encoder
 │   ├── oxideav-mp3/          # MP3 decoder + encoder
 │   ├── oxideav-aac/          # AAC-LC decoder + encoder
-│   ├── oxideav-celt/         # CELT standalone decoder
-│   ├── oxideav-speex/        # Speex decoder (NB + WB, with formant postfilter)
+│   ├── oxideav-celt/         # CELT decoder + encoder (standalone Opus high-band)
+│   ├── oxideav-speex/        # Speex decoder (NB + WB) + NB mode-5 encoder
 │   ├── oxideav-gsm/          # GSM 06.10 decoder + encoder
-│   ├── oxideav-g7231/        # G.723.1 scaffold
-│   ├── oxideav-g728/         # G.728 scaffold
-│   ├── oxideav-g729/         # G.729 scaffold
+│   ├── oxideav-g711/         # G.711 μ-law + A-law decoder + encoder (pcm_mulaw / pcm_alaw)
+│   ├── oxideav-g722/         # G.722 wideband ADPCM decoder + encoder (64 kbit/s)
+│   ├── oxideav-g7231/        # G.723.1 decoder + ACELP (5.3k) encoder
+│   ├── oxideav-g728/         # G.728 LD-CELP decoder (machinery real, tables placeholder)
+│   ├── oxideav-g729/         # G.729 CS-ACELP decoder + encoder
 │   │
 │   ├── oxideav-mjpeg/        # MJPEG decoder + encoder + still-JPEG container
 │   ├── oxideav-ffv1/         # FFV1 v3 decoder + encoder
@@ -66,9 +68,9 @@ oxideav/
 │   ├── oxideav-h263/         # H.263 decoder + encoder
 │   ├── oxideav-h264/         # H.264 decoder (baseline I-slice skeleton)
 │   ├── oxideav-h265/         # H.265 header parser
-│   ├── oxideav-vp8/          # VP8 decoder (I + P frames) + IVF container
+│   ├── oxideav-vp8/          # VP8 decoder (I + P) + I-frame encoder + IVF container
 │   ├── oxideav-vp9/          # VP9 header parser
-│   ├── oxideav-av1/          # AV1 header parser
+│   ├── oxideav-av1/          # AV1 parse + intra primitives (range decode, DC/V/H pred, 4×4/8×8 DCT)
 │   ├── oxideav-prores/       # Apple ProRes scaffold (decoder/encoder not yet implemented)
 │   ├── oxideav-jpegxl/       # JPEG XL scaffold (decoder/encoder not yet implemented)
 │   ├── oxideav-jpeg2000/     # JPEG 2000 scaffold (decoder/encoder not yet implemented)
@@ -128,18 +130,23 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 
 | Codec | Decode | Encode |
 |-------|--------|--------|
-| **PCM** (s8/16/24/32/f32) | ✅ all variants | ✅ all variants |
+| **PCM** (s8/16/24/32/f32/f64) | ✅ all variants | ✅ all variants |
+| **slin** (Asterisk raw PCM) | ✅ .sln/.slin/.sln16/.sln48 etc. | ✅ same — headerless S16LE |
 | **FLAC** | ✅ bit-exact vs reference | ✅ bit-exact vs reference |
 | **Vorbis** | ✅ matches lewton/ffmpeg (type-0/1/2 residue) | ✅ stereo coupling + ATH floor |
-| **Opus** | ✅ CELT mono+stereo; SILK NB/MB/WB mono 10+20 ms | — |
-| **MP1** | ✅ all modes, RMS 2.9e-5 vs ffmpeg | — |
+| **Opus** | ✅ CELT mono+stereo; SILK NB/MB/WB mono 10+20+40+60 ms; SILK stereo | — |
+| **MP1** | ✅ all modes, RMS 2.9e-5 vs ffmpeg | ✅ CBR (greedy allocator, 89 dB PSNR on pure tone) |
 | **MP2** | ✅ all modes, RMS 2.9e-5 vs ffmpeg | ✅ CBR mono+stereo (greedy allocator, ~31 dB PSNR) |
 | **MP3** | ✅ MPEG-1 Layer III (M/S stereo) | ✅ CBR mono+stereo |
 | **AAC-LC** | ✅ mono+stereo, M/S, IMDCT | ✅ mono+stereo, ffmpeg accepts |
-| **CELT** | ✅ full §4.3 pipeline (energy + PVQ + IMDCT + post-filter) | — |
-| **Speex** | ✅ NB modes 1-8 + WB via QMF+SB-CELP (+ formant postfilter) | — |
+| **CELT** | ✅ full §4.3 pipeline (energy + PVQ + IMDCT + post-filter) | ✅ mono long-block (intra-only; energy + PVQ + fMDCT) |
+| **Speex** | ✅ NB modes 1-8 + WB via QMF+SB-CELP (+ formant postfilter) | ✅ NB mode-5 CELP (~25 dB SNR, gain-corrected) |
 | **GSM 06.10** | ✅ full RPE-LTP | ✅ full RPE-LTP (standard + WAV-49) |
-| **G.723.1 / G.728 / G.729** | scaffold | — |
+| **G.711** (μ-law / A-law) | ✅ ITU tables | ✅ ITU tables (pcm_mulaw / pcm_alaw + aliases) |
+| **G.722** | ✅ 64 kbit/s QMF + dual-band ADPCM (37 dB PSNR, self-consistent tables) | ✅ same roundtrip |
+| **G.723.1** | ✅ ACELP + MP-MLQ decode (silence emit) | ✅ 5.3k ACELP (6.3k MP-MLQ Unsupported) |
+| **G.728** | ✅ LD-CELP machinery (50-order LPC, backward-adaptive); placeholder codebook tables | — |
+| **G.729** | ✅ CS-ACELP (non-spec tables, produces audible speech) | ✅ symmetric encoder |
 | **MJPEG** | ✅ baseline 4:2:0/4:2:2/4:4:4/grey | ✅ baseline |
 | **FFV1** | ✅ v3, 4:2:0/4:4:4 | ✅ v3 |
 | **MPEG-1 video** | ✅ I+P+B frames | ✅ I+P frames (half-pel ME, 42 dB PSNR) |
@@ -148,11 +155,12 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 | **H.263** | ✅ I+P pictures, half-pel MC | ✅ I+P pictures (100% bit-exact vs ffmpeg) |
 | **H.264** | Baseline I-slice skeleton: CAVLC + intra-pred + transforms + deblocking; 100% on solid-gray IDR | — |
 | **H.265 (HEVC)** | NAL + VPS/SPS/PPS/slice parse | — |
-| **VP8** | ✅ I+P frames (6-tap sub-pel + MV decode + ref management) | — |
+| **VP8** | ✅ I+P frames (6-tap sub-pel + MV decode + ref management) | ✅ I-frame only (DC_PRED, 42 dB PSNR at qindex 50) |
 | **VP9** | Uncompressed + partial compressed header | — |
-| **AV1** | OBU + sequence/frame header parse | — |
-| **WebP VP8L** | ✅ full lossless (Huffman + LZ77 + transforms) | — |
-| **AMV video** | ✅ (synthesised JPEG header + vertical flip) | — |
+| **AV1** | OBU + sequence/frame header parse, range decoder, DC/V/H intra-pred, 4×4/8×8 DCT | — |
+| **WebP VP8L** | ✅ full lossless (Huffman + LZ77 + transforms) | ✅ lossless (no transforms, byte-identical roundtrip) |
+| **WebP VP8** | ✅ lossy (via VP8 decoder) | ✅ lossy (via VP8 I-frame enc, 32 dB PSNR) |
+| **AMV video** | ✅ (synthesised JPEG header + vertical flip) | ✅ (via MJPEG encoder, 33 dB PSNR roundtrip) |
 | **IMA-ADPCM (AMV)** | ✅ | ✅ (33.8 dB PSNR roundtrip) |
 | **PNG / APNG** | ✅ 5 color types × 8/16-bit, all 5 filters, APNG animation | ✅ same matrix + APNG emit |
 | **GIF** | ✅ GIF87a/89a, LZW, interlaced, animation | ✅ GIF89a, animation, per-frame palettes |
