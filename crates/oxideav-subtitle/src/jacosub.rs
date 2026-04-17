@@ -101,10 +101,10 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
                         shift_units = v;
                     }
                 }
-                "title" | "author" | "comment" | "source" | "director" | "prg" | "qtitle" => {
-                    if !value.is_empty() {
-                        track.metadata.push((key_lc, value.trim().to_string()));
-                    }
+                "title" | "author" | "comment" | "source" | "director" | "prg" | "qtitle"
+                    if !value.is_empty() =>
+                {
+                    track.metadata.push((key_lc, value.trim().to_string()));
                 }
                 _ => {
                     // Ignore unknown directives — the extradata keeps the raw form.

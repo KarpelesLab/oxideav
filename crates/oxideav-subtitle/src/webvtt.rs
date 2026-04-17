@@ -281,15 +281,15 @@ fn apply_css_prop(style: &mut SubtitleStyle, key: &str, val: &str) {
                 style.font_size = Some(v);
             }
         }
-        "font-weight" => {
-            if val.eq_ignore_ascii_case("bold") || val == "700" || val == "800" || val == "900" {
-                style.bold = true;
-            }
+        "font-weight"
+            if val.eq_ignore_ascii_case("bold") || val == "700" || val == "800" || val == "900" =>
+        {
+            style.bold = true;
         }
-        "font-style" => {
-            if val.eq_ignore_ascii_case("italic") || val.eq_ignore_ascii_case("oblique") {
-                style.italic = true;
-            }
+        "font-style"
+            if val.eq_ignore_ascii_case("italic") || val.eq_ignore_ascii_case("oblique") =>
+        {
+            style.italic = true;
         }
         "text-decoration" => {
             let lc = val.to_ascii_lowercase();

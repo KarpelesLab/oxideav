@@ -648,15 +648,11 @@ fn parse_sami_css(src: &str) -> Vec<SubtitleStyle> {
                                 .collect();
                             st.font_size = num.parse::<f32>().ok();
                         }
-                        "font-weight" => {
-                            if v.eq_ignore_ascii_case("bold") {
-                                st.bold = true;
-                            }
+                        "font-weight" if v.eq_ignore_ascii_case("bold") => {
+                            st.bold = true;
                         }
-                        "font-style" => {
-                            if v.eq_ignore_ascii_case("italic") {
-                                st.italic = true;
-                            }
+                        "font-style" if v.eq_ignore_ascii_case("italic") => {
+                            st.italic = true;
                         }
                         _ => {}
                     }
