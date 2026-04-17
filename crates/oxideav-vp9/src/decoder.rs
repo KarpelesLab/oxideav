@@ -109,11 +109,14 @@ impl Decoder for Vp9Decoder {
         if self.eof {
             return Err(Error::Eof);
         }
-        // We parsed a header but cannot reconstruct pixels.
+        // We parsed a header but cannot reconstruct pixels. Tile skeleton,
+        // range decoder, intra primitives (DC/V/H) and 4×4 / 8×8 iDCT are
+        // wired up as primitives; the missing piece is partition syntax.
         if self.last_header.is_some() {
             return Err(Error::unsupported(
-                "vp9 §6.4 decode_tiles: pixel reconstruction not implemented; \
-                 only header parsing is available",
+                "vp9 tile_decode: partition syntax §6.4.3 not implemented — \
+                 range decode + intra primitives (DC/V/H, §8.5.1) + \
+                 iDCT 4×4/8×8 (§8.7.1) are available as primitives",
             ));
         }
         Err(Error::NeedMore)
