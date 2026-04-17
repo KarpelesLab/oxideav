@@ -8,7 +8,8 @@
 //!   `f_code=1` vector range and keeps complexity low. Reference frame is
 //!   edge-replicated via the shared `mc::predict_block` helper.
 //! * **1MV mode only** — one MV per macroblock. 4MV is out of scope for this
-//!   first cut; see the TODO at the bottom of the file.
+//!   first cut; see the "follow-up items" section at the bottom of the file
+//!   for the known-future enhancements.
 //! * **MV coding** per §7.6.3 — the median predictor over three causal
 //!   neighbours (left, top, top-right), then MVD reconstruction via the
 //!   unsigned-magnitude + sign + residual layout. `f_code=1` keeps the
@@ -910,8 +911,18 @@ mod tests {
 }
 
 // -------------------------------------------------------------------------
-// TODO (follow-up):
+// Follow-up items (not blocking — documented for future work):
+//
 // * 4MV mode: emit `PMbType::Inter4MV` MCBPC codes, four MVs per MB with
-//   per-block ME. Decoder already supports this path.
-// * Intra MB fallback inside P-VOP for high-residual blocks.
-// * B-VOPs, GMC, sprites, quarter-pel motion, OBMC — out of scope by design.
+//   per-block ME. The decoder already supports this path, so enabling
+//   it on the encoder side would be a pure encoder-complexity trade-off
+//   (better compression on non-translational motion in exchange for a
+//   per-block ME search and four MV VLCs per MB).
+// * Intra MB fallback inside P-VOP for high-residual blocks. Useful on
+//   scene-change boundaries where the inter predictor yields more
+//   residual bits than a fresh intra block would. Not yet implemented;
+//   the encoder currently always codes MBs as inter inside a P-VOP.
+// * B-VOPs, GMC, sprites, quarter-pel motion, OBMC — deliberately out
+//   of scope for this encoder. They would each require material
+//   bitstream changes (B-VOP syntax, sprite metadata, the `quarter_pel`
+//   flag path) and are tracked separately from the P-VOP work.

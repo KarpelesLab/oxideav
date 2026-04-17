@@ -16,13 +16,15 @@
 //!   D[256] = +1.144989014   (peak, = 75038/65536)
 //!   D[511] = +0.000015259
 //!
-//! TODO(dedup): the MP3 crate ships an identical table in
-//! `oxideav_mp3::window::SYNTH_WINDOW_D`; a future cleanup can move both
-//! into a shared helper crate. The MP1 crate keeps its own copy to
-//! remain standalone (no forced dependency on MP3 when only MP1 is
-//! wanted in a minimal build).
+//! This table is the canonical MPEG-1 Audio synthesis window and is
+//! re-exported by the MP3 crate (see `oxideav_mp3::window::SYNTH_WINDOW_D`)
+//! to avoid duplication. MP1 remains the upstream owner because Layer I
+//! is the simplest member of the family and has no other dependencies.
 
 /// 512-tap synthesis window D[] (ISO/IEC 11172-3 Table 3-B.3).
+///
+/// Also re-exported as `SYNTH_WINDOW_D` for consumers (MP2/MP3) that
+/// follow libmpg123 naming.
 #[rustfmt::skip]
 pub const SYNTHESIS_WINDOW: [f32; 512] = [
     0.000000000,
@@ -539,9 +541,23 @@ pub const SYNTHESIS_WINDOW: [f32; 512] = [
     0.000015259,
 ];
 
+/// Alias for [`SYNTHESIS_WINDOW`] using the libmpg123 / Layer III naming
+/// convention (`D[]`). Provided so downstream crates (MP3) can consume
+/// the same bits under their historical symbol name.
+pub use self::SYNTHESIS_WINDOW as SYNTH_WINDOW_D;
+
+/// Return the 512-entry synthesis window D[] (ISO 11172-3 Annex B / D.1).
+///
+/// Equivalent to `&SYNTHESIS_WINDOW`; kept as a function for parity with
+/// the MP3 crate's accessor.
+#[inline]
+pub fn synthesis_window() -> &'static [f32; 512] {
+    &SYNTHESIS_WINDOW
+}
+
 #[cfg(test)]
 mod tests {
-    use super::SYNTHESIS_WINDOW;
+    use super::{synthesis_window, SYNTHESIS_WINDOW, SYNTH_WINDOW_D};
 
     #[test]
     fn synthesis_window_endpoints() {
@@ -559,5 +575,18 @@ mod tests {
             (s - 85.064).abs() < 0.5,
             "unexpected sum_abs {s}; check table"
         );
+    }
+
+    #[test]
+    fn alias_matches_primary_symbol() {
+        // Sanity-check the re-export used by the MP3 crate: same bits as
+        // the primary `SYNTHESIS_WINDOW` constant. (Pointer equality
+        // doesn't hold for `const` items — they materialise a fresh
+        // array at each use site — so compare element-wise.)
+        for i in 0..512 {
+            assert_eq!(SYNTHESIS_WINDOW[i], SYNTH_WINDOW_D[i]);
+        }
+        assert_eq!(synthesis_window()[0], SYNTHESIS_WINDOW[0]);
+        assert_eq!(synthesis_window()[256], SYNTHESIS_WINDOW[256]);
     }
 }

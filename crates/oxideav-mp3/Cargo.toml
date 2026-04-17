@@ -12,3 +12,7 @@ description = "Pure-Rust MPEG-1/2 Audio Layer III (MP3) decoder + minimum-viable
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }
 oxideav-container = { workspace = true }
+# Shared synthesis window D[] lives upstream in the MP1 crate — both
+# layers read the same ISO 11172-3 Table 3-B.3, so MP3 re-exports
+# MP1's constant rather than shipping a second copy.
+oxideav-mp1 = { workspace = true }

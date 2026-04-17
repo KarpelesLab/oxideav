@@ -293,8 +293,8 @@ fn p_vop_ffmpeg_decode() {
     // drift). P-VOPs accumulate drift with ffmpeg's integer IDCT vs our
     // float IDCT, so we only check (a) the I-VOP frame is accurate and
     // (b) PSNR stays reasonable for the first couple of P-VOPs. Longer
-    // GOPs will drift; a quarter-pel or bit-exact integer-IDCT encoder
-    // path is on the follow-up TODO list.
+    // GOPs will drift; a bit-exact integer-IDCT encoder path is listed
+    // in the encoder's follow-up items (see `src/pvop.rs`).
     let src0 = flatten_frame(&src_frames[0]);
     let ff0 = &ffmpeg_decoded[0..per_frame_bytes];
     let p0 = psnr(&src0, ff0);
