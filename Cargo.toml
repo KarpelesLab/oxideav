@@ -69,7 +69,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 oxideav-core = { path = "crates/oxideav-core", version = "0.0.3" }
-oxideav-codec = { path = "crates/oxideav-codec", version = "0.0.3" }
+oxideav-codec = { path = "crates/oxideav-codec", version = "0.0.4" }
 oxideav-container = { path = "crates/oxideav-container", version = "0.0.3" }
 oxideav-pipeline = { path = "crates/oxideav-pipeline", version = "0.0.3" }
 oxideav-basic = { path = "crates/oxideav-basic", version = "0.0.3" }

@@ -1,6 +1,8 @@
 [package]
 name = "oxideav-codec"
-version.workspace = true
+# Tracked independently of the workspace version since this crate's
+# trait surface evolves slower than the per-codec implementations.
+version = "0.0.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

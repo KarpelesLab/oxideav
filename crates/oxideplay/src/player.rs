@@ -289,16 +289,17 @@ impl<D: OutputDriver> Player<D> {
             Duration::ZERO
         };
 
-        // Reset decoder queues so we don't serve pre-seek frames.
+        // Reset decoders so we don't serve pre-seek frames and their
+        // internal filter / predictor state is wiped. reset() falls back
+        // to a flush+drain for codecs that don't override it, so this is
+        // always at least as good as the old behaviour.
         if let Some(dec) = self.audio_decoder.as_mut() {
-            // Best-effort flush; any error here just means some buffered
-            // frames remain, which will be harmless.
-            let _ = dec.flush();
-            drain_decoder(dec.as_mut());
+            // Best-effort; any error here just means some buffered frames
+            // remain, which will be harmless.
+            let _ = dec.reset();
         }
         if let Some(dec) = self.video_decoder.as_mut() {
-            let _ = dec.flush();
-            drain_decoder(dec.as_mut());
+            let _ = dec.reset();
         }
         self.clock_baseline_samples =
             self.driver
@@ -481,18 +482,6 @@ impl<D: OutputDriver> Player<D> {
             last_tick = Instant::now();
         }
         Ok(())
-    }
-}
-
-/// Consume all frames currently sitting in a decoder (after flush),
-/// discarding them. Used to clear buffers after seek.
-fn drain_decoder(dec: &mut dyn Decoder) {
-    loop {
-        match dec.receive_frame() {
-            Ok(_) => continue,
-            Err(Error::NeedMore) | Err(Error::Eof) => break,
-            Err(_) => break,
-        }
     }
 }
 
