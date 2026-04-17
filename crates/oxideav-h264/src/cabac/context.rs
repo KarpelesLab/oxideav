@@ -25,7 +25,7 @@
 ///
 /// Matches the `(pStateIdx, valMPS)` pair from §9.3.1.1. `pStateIdx`
 /// is in `0..=63`; `valMPS` is `0` or `1`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CabacContext {
     /// Probability state index (§Table 9-44): 0..=63.
     pub p_state_idx: u8,
