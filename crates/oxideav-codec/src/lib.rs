@@ -6,7 +6,7 @@
 
 pub mod registry;
 
-use oxideav_core::{CodecId, CodecParameters, Frame, Packet, Result};
+use oxideav_core::{CodecId, CodecParameters, ExecutionContext, Frame, Packet, Result};
 
 /// A packet-to-frame decoder.
 pub trait Decoder: Send {
@@ -23,6 +23,14 @@ pub trait Decoder: Send {
     /// Signal end-of-stream. After this, `receive_frame` will drain buffered
     /// frames and eventually return `Error::Eof`.
     fn flush(&mut self) -> Result<()>;
+
+    /// Advisory: announce the runtime environment (today: a thread budget
+    /// for codec-internal parallelism). Called at most once, before the
+    /// first `send_packet`. Default no-op; codecs that want to run
+    /// slice-/GOP-/tile-parallel override this to capture the budget.
+    /// Ignoring the hint is always safe — callers must still work with
+    /// a decoder that runs serial.
+    fn set_execution_context(&mut self, _ctx: &ExecutionContext) {}
 }
 
 /// A frame-to-packet encoder.
@@ -37,6 +45,10 @@ pub trait Encoder: Send {
     fn receive_packet(&mut self) -> Result<Packet>;
 
     fn flush(&mut self) -> Result<()>;
+
+    /// Advisory: announce the runtime environment. Same semantics as
+    /// [`Decoder::set_execution_context`].
+    fn set_execution_context(&mut self, _ctx: &ExecutionContext) {}
 }
 
 /// Factory that builds a decoder for a given codec parameter set.

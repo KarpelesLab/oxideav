@@ -24,6 +24,7 @@
 
 pub mod dag;
 pub mod executor;
+pub mod pipeline;
 pub mod schema;
 pub mod sinks;
 pub mod validate;

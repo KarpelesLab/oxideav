@@ -55,6 +55,11 @@ struct Cli {
     /// Prefetch buffer size in MiB (default 64).
     #[arg(long, default_value_t = (DEFAULT_BUFFER_BYTES / (1 << 20)) as u32)]
     buffer_mib: u32,
+
+    /// Thread budget for `--job` execution. `0` = auto (logical CPUs or
+    /// the job's own `threads` field). Ignored in non-`--job` mode.
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
 }
 
 fn main() -> ExitCode {
@@ -84,7 +89,14 @@ fn run(cli: Cli) -> oxideav_core::Result<()> {
     let sources = build_sources();
 
     if let Some(job_src) = cli.job.as_deref() {
-        return run_job(&registries, &sources, job_src, cli.mute, !cli.no_video);
+        return run_job(
+            &registries,
+            &sources,
+            job_src,
+            cli.mute,
+            !cli.no_video,
+            cli.threads,
+        );
     }
 
     let input = cli
@@ -264,6 +276,7 @@ fn run_job(
     job_src: &str,
     mute: bool,
     want_video: bool,
+    threads: usize,
 ) -> oxideav_core::Result<()> {
     use oxideav::job::{Executor, Job};
 
@@ -294,6 +307,7 @@ fn run_job(
     let sink = Box::new(job_sink::PlayerSink::new(mute, want_video));
     let stats = Executor::new(&job, &registries.codecs, &registries.containers, sources)
         .with_sink_override(target, sink)
+        .with_threads(threads)
         .run()?;
     eprintln!(
         "oxideplay: job finished ({} pkts read, {} frames decoded, {} frames played)",

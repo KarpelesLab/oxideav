@@ -74,6 +74,11 @@ enum Command {
         /// Inline JSON job description.
         #[arg(long)]
         inline: Option<String>,
+        /// Thread budget for the executor. `0` = auto (use the JSON's
+        /// `threads` field, falling back to the number of logical CPUs).
+        /// `1` forces serial execution; `≥ 2` runs pipelined.
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
     },
     /// Validate a JSON job description without running it.
     Validate {
@@ -127,7 +132,11 @@ fn main() -> ExitCode {
             format.as_deref(),
             buffer_bytes,
         ),
-        Command::Run { file, inline } => cmd_run(&registries, &sources, file, inline),
+        Command::Run {
+            file,
+            inline,
+            threads,
+        } => cmd_run(&registries, &sources, file, inline, threads),
         Command::Validate { file, inline } => cmd_validate(file, inline),
         Command::DryRun { file, inline } => cmd_dry_run(file, inline),
     };
@@ -482,9 +491,12 @@ fn cmd_run(
     sources: &SourceRegistry,
     file: Option<String>,
     inline: Option<String>,
+    threads: usize,
 ) -> oxideav::core::Result<()> {
     let job = parse_job(file, inline)?;
-    let stats = oxideav::job::Executor::new(&job, &reg.codecs, &reg.containers, sources).run()?;
+    let stats = oxideav::job::Executor::new(&job, &reg.codecs, &reg.containers, sources)
+        .with_threads(threads)
+        .run()?;
     eprintln!(
         "oxideav run: {} packets read ({} copied, {} encoded), {} frames decoded",
         stats.packets_read, stats.packets_copied, stats.packets_encoded, stats.frames_decoded,

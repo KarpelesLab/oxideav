@@ -1,12 +1,16 @@
-//! Single-threaded DAG executor.
+//! DAG executor. Two modes share the same DAG-resolution + track-runtime
+//! building code:
 //!
-//! The executor takes a validated [`Job`](crate::Job), resolves it to a
-//! [`Dag`](crate::Dag), and runs each output sequentially. Within one
-//! output we open every source demuxer exactly once (deduped by URI) and
-//! fan packets out to the tracks that consume them.
+//! - **Serial mode** (`threads == 1`): one packet pulled, one packet routed,
+//!   one frame at a time. The original path — minimal, predictable, easy
+//!   to reason about.
+//! - **Pipelined mode** (`threads ≥ 2`, the default when
+//!   `available_parallelism()` reports ≥ 2 cores): one thread per stage
+//!   per track, bounded mpsc channels in between, mux on the caller
+//!   thread so sinks don't need to be `Send`. See [`crate::pipeline`].
 //!
-//! Parallel scheduling and multi-demuxer output composition are deliberate
-//! follow-ups.
+//! Outputs within one job still run sequentially — multi-output
+//! parallelism is a deliberate follow-up.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -14,11 +18,13 @@ use std::path::PathBuf;
 use oxideav_codec::{CodecRegistry, Decoder, Encoder};
 use oxideav_container::{ContainerRegistry, Demuxer, ReadSeek};
 use oxideav_core::{
-    CodecId, CodecParameters, Error, Frame, MediaType, Packet, Result, StreamInfo, TimeBase,
+    CodecId, CodecParameters, Error, ExecutionContext, Frame, MediaType, Packet, Result,
+    StreamInfo, TimeBase,
 };
 use oxideav_source::SourceRegistry;
 
 use crate::dag::{Dag, DagNode, MuxTrack, ResolvedSelector};
+use crate::pipeline;
 use crate::schema::{is_reserved_sink, Job};
 use crate::sinks::{open_file_write, FileSink, NullSink};
 
@@ -39,13 +45,17 @@ pub trait JobSink {
     fn finish(&mut self) -> Result<()>;
 }
 
-/// Single-threaded job runner.
+/// Job runner. Constructed with a validated `Job` + registries; dispatches
+/// to serial or pipelined execution based on the effective thread budget.
 pub struct Executor<'a> {
     job: &'a Job,
     codecs: &'a CodecRegistry,
     containers: &'a ContainerRegistry,
     sources: &'a SourceRegistry,
     sink_overrides: HashMap<String, Box<dyn JobSink>>,
+    /// Explicit thread budget from the caller. `None` = resolve from
+    /// `job.threads` or autodetect. `Some(0)` is treated as auto as well.
+    explicit_threads: Option<usize>,
 }
 
 impl<'a> Executor<'a> {
@@ -61,6 +71,7 @@ impl<'a> Executor<'a> {
             containers,
             sources,
             sink_overrides: HashMap::new(),
+            explicit_threads: None,
         }
     }
 
@@ -71,18 +82,50 @@ impl<'a> Executor<'a> {
         self
     }
 
+    /// Override the thread budget. `0` means "auto" (use the value from the
+    /// job's `threads` key, or fall back to `available_parallelism()`).
+    /// `1` forces strictly serial execution; `≥ 2` requests pipelined.
+    pub fn with_threads(mut self, n: usize) -> Self {
+        self.explicit_threads = Some(n);
+        self
+    }
+
     /// Validate, resolve, and run the job. Processes outputs in their
     /// document order.
     pub fn run(mut self) -> Result<ExecutorStats> {
         self.job.validate()?;
         let dag = self.job.to_dag()?;
+        let threads = self.resolve_threads();
         let mut stats = ExecutorStats::default();
         let names: Vec<String> = dag.roots.keys().cloned().collect();
         for name in names {
-            let out_stats = self.run_output(&dag, &name)?;
+            let out_stats = if threads >= 2 {
+                self.run_output_pipelined(&dag, &name, threads)?
+            } else {
+                self.run_output(&dag, &name)?
+            };
             stats.merge(&out_stats);
         }
         Ok(stats)
+    }
+
+    /// Resolve the effective thread budget. Priority: explicit
+    /// `with_threads(n > 0)` > `job.threads` > `available_parallelism()`
+    /// > `1`.
+    fn resolve_threads(&self) -> usize {
+        if let Some(n) = self.explicit_threads {
+            if n > 0 {
+                return n;
+            }
+        }
+        if let Some(n) = self.job.threads {
+            if n > 0 {
+                return n;
+            }
+        }
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
     }
 
     fn run_output(&mut self, dag: &Dag, name: &str) -> Result<ExecutorStats> {
@@ -127,9 +170,12 @@ impl<'a> Executor<'a> {
             pl.input_time_base = info.time_base;
         }
 
-        // Instantiate decoders / filters / encoders for each track.
+        // Instantiate decoders / filters / encoders for each track. The
+        // serial path tells codecs to stay single-threaded; the pipelined
+        // path passes its own thread budget below.
+        let ctx = ExecutionContext::serial();
         for pl in &mut pipelines {
-            pl.instantiate(self.codecs)?;
+            pl.instantiate(self.codecs, &ctx)?;
         }
 
         // Build the per-track output stream infos + open (or replace) the sink.
@@ -187,7 +233,11 @@ impl<'a> Executor<'a> {
         Ok(stats)
     }
 
-    fn build_track_runtime(&self, dag: &Dag, track: &MuxTrack) -> Result<TrackRuntime> {
+    pub(crate) fn build_track_runtime(
+        &self,
+        dag: &Dag,
+        track: &MuxTrack,
+    ) -> Result<TrackRuntime> {
         // Walk upstream chain, accumulating stages in reverse (top-down).
         // The chain ends at a Demuxer (leaf).
         let mut stages: Vec<StageSpec> = Vec::new();
@@ -254,7 +304,7 @@ impl<'a> Executor<'a> {
         ))
     }
 
-    fn open_demuxer(&self, uri: &str) -> Result<Box<dyn Demuxer>> {
+    pub(crate) fn open_demuxer(&self, uri: &str) -> Result<Box<dyn Demuxer>> {
         let file = self.sources.open(uri)?;
         let mut file: Box<dyn ReadSeek> = file;
         let ext = ext_from_uri(uri);
@@ -262,7 +312,72 @@ impl<'a> Executor<'a> {
         self.containers.open_demuxer(&format, file)
     }
 
-    fn open_sink(&mut self, name: &str, out_streams: &[StreamInfo]) -> Result<Box<dyn JobSink>> {
+    /// Pipelined counterpart to [`Self::run_output`]. Builds the same
+    /// per-track runtimes + demuxers + sink, then hands them off to
+    /// [`crate::pipeline::run_pipelined`] which spawns a stage-per-thread
+    /// worker graph.
+    fn run_output_pipelined(
+        &mut self,
+        dag: &Dag,
+        name: &str,
+        threads: usize,
+    ) -> Result<ExecutorStats> {
+        let root_id = dag.roots[name];
+        let tracks: Vec<MuxTrack> = match dag.node(root_id) {
+            DagNode::Mux { tracks, .. } => tracks.clone(),
+            other => {
+                return Err(Error::invalid(format!(
+                    "job: output {name}: expected Mux root, got {other:?}"
+                )));
+            }
+        };
+
+        let mut pipelines: Vec<TrackRuntime> = Vec::new();
+        for t in &tracks {
+            pipelines.push(self.build_track_runtime(dag, t)?);
+        }
+        let mut dmx_by_uri: HashMap<String, Box<dyn Demuxer>> = HashMap::new();
+        for pl in &pipelines {
+            if !dmx_by_uri.contains_key(&pl.source_uri) {
+                let dmx = self.open_demuxer(&pl.source_uri)?;
+                dmx_by_uri.insert(pl.source_uri.clone(), dmx);
+            }
+        }
+        for pl in &mut pipelines {
+            let dmx = dmx_by_uri.get(&pl.source_uri).unwrap();
+            pl.source_stream = select_stream(dmx.streams(), &pl.selector)?;
+            let info = dmx
+                .streams()
+                .iter()
+                .find(|s| s.index == pl.source_stream)
+                .ok_or_else(|| Error::invalid("selected stream not in demuxer"))?;
+            pl.input_params = info.params.clone();
+            pl.input_time_base = info.time_base;
+        }
+        let ctx = ExecutionContext::with_threads(threads);
+        for pl in &mut pipelines {
+            pl.instantiate(self.codecs, &ctx)?;
+        }
+        let out_streams: Vec<StreamInfo> = pipelines
+            .iter()
+            .enumerate()
+            .map(|(i, pl)| StreamInfo {
+                index: i as u32,
+                time_base: pl.output_time_base(),
+                duration: None,
+                start_time: Some(0),
+                params: pl.output_params().clone(),
+            })
+            .collect();
+        let sink = self.open_sink(name, &out_streams)?;
+        pipeline::run_pipelined(pipelines, dmx_by_uri, sink, out_streams)
+    }
+
+    pub(crate) fn open_sink(
+        &mut self,
+        name: &str,
+        out_streams: &[StreamInfo],
+    ) -> Result<Box<dyn JobSink>> {
         if let Some(s) = self.sink_overrides.remove(name) {
             return Ok(s);
         }
@@ -301,7 +416,7 @@ impl<'a> Executor<'a> {
 // ───────────────────────── per-track runtime ─────────────────────────
 
 #[derive(Clone, Debug)]
-enum StageSpec {
+pub(crate) enum StageSpec {
     Decode,
     Filter {
         kind: crate::dag::FilterKind,
@@ -315,23 +430,24 @@ enum StageSpec {
 }
 
 /// One track's execution state: decoder + filter chain + encoder, plus the
-/// resolved source URI + selected stream index.
-struct TrackRuntime {
-    source_uri: String,
-    selector: ResolvedSelector,
-    source_stream: u32,
-    kind: MediaType,
-    copy: bool,
-    stages: Vec<StageSpec>,
-    input_params: CodecParameters,
-    input_time_base: TimeBase,
-    decoder: Option<Box<dyn Decoder>>,
-    filters: Vec<RuntimeFilter>,
-    encoder: Option<Box<dyn Encoder>>,
-    encoder_time_base: Option<TimeBase>,
+/// resolved source URI + selected stream index. Used by both the serial
+/// executor and the pipelined runner in [`crate::pipeline`].
+pub(crate) struct TrackRuntime {
+    pub(crate) source_uri: String,
+    pub(crate) selector: ResolvedSelector,
+    pub(crate) source_stream: u32,
+    pub(crate) kind: MediaType,
+    pub(crate) copy: bool,
+    pub(crate) stages: Vec<StageSpec>,
+    pub(crate) input_params: CodecParameters,
+    pub(crate) input_time_base: TimeBase,
+    pub(crate) decoder: Option<Box<dyn Decoder>>,
+    pub(crate) filters: Vec<RuntimeFilter>,
+    pub(crate) encoder: Option<Box<dyn Encoder>>,
+    pub(crate) encoder_time_base: Option<TimeBase>,
 }
 
-enum RuntimeFilter {
+pub(crate) enum RuntimeFilter {
     #[cfg(feature = "audio_filter")]
     Audio(Box<dyn oxideav_audio_filter::AudioFilter>),
     #[allow(dead_code)] // only constructed when audio_filter feature is disabled
@@ -362,7 +478,11 @@ impl TrackRuntime {
         }
     }
 
-    fn instantiate(&mut self, codecs: &CodecRegistry) -> Result<()> {
+    pub(crate) fn instantiate(
+        &mut self,
+        codecs: &CodecRegistry,
+        ctx: &ExecutionContext,
+    ) -> Result<()> {
         // Track running frame format through the stage stack so the encoder
         // can be constructed with a realistic parameter set.
         let mut running = self.input_params.clone();
@@ -370,7 +490,8 @@ impl TrackRuntime {
             match stage {
                 StageSpec::Decode => {
                     if self.decoder.is_none() {
-                        let d = codecs.make_decoder(&self.input_params)?;
+                        let mut d = codecs.make_decoder(&self.input_params)?;
+                        d.set_execution_context(ctx);
                         self.decoder = Some(d);
                     }
                 }
@@ -407,7 +528,8 @@ impl TrackRuntime {
                     if let Some(h) = params.get("height").and_then(|b| b.as_u64()) {
                         enc_params.height = Some(h as u32);
                     }
-                    let encoder = codecs.make_encoder(&enc_params)?;
+                    let mut encoder = codecs.make_encoder(&enc_params)?;
+                    encoder.set_execution_context(ctx);
                     let out_params = encoder.output_params().clone();
                     running = out_params.clone();
                     self.encoder_time_base = Some(match out_params.sample_rate {
@@ -421,7 +543,7 @@ impl TrackRuntime {
         Ok(())
     }
 
-    fn output_params(&self) -> &CodecParameters {
+    pub(crate) fn output_params(&self) -> &CodecParameters {
         if let Some(enc) = &self.encoder {
             enc.output_params()
         } else {
@@ -429,7 +551,7 @@ impl TrackRuntime {
         }
     }
 
-    fn output_time_base(&self) -> TimeBase {
+    pub(crate) fn output_time_base(&self) -> TimeBase {
         self.encoder_time_base.unwrap_or(self.input_time_base)
     }
 
@@ -563,7 +685,10 @@ impl TrackRuntime {
     }
 }
 
-fn drain_decoder(dec: &mut dyn Decoder, stats: &mut ExecutorStats) -> Result<Vec<Frame>> {
+pub(crate) fn drain_decoder(
+    dec: &mut dyn Decoder,
+    stats: &mut ExecutorStats,
+) -> Result<Vec<Frame>> {
     let mut out = Vec::new();
     loop {
         match dec.receive_frame() {
@@ -577,7 +702,7 @@ fn drain_decoder(dec: &mut dyn Decoder, stats: &mut ExecutorStats) -> Result<Vec
     }
 }
 
-fn run_filter(filter: &mut RuntimeFilter, frame: Frame) -> Result<Vec<Frame>> {
+pub(crate) fn run_filter(filter: &mut RuntimeFilter, frame: Frame) -> Result<Vec<Frame>> {
     match filter {
         #[cfg(feature = "audio_filter")]
         RuntimeFilter::Audio(f) => match frame {
@@ -595,7 +720,7 @@ fn run_filter(filter: &mut RuntimeFilter, frame: Frame) -> Result<Vec<Frame>> {
     }
 }
 
-fn flush_filter(filter: &mut RuntimeFilter) -> Result<Vec<Frame>> {
+pub(crate) fn flush_filter(filter: &mut RuntimeFilter) -> Result<Vec<Frame>> {
     match filter {
         #[cfg(feature = "audio_filter")]
         RuntimeFilter::Audio(f) => {
@@ -684,7 +809,7 @@ fn build_audio_filter(
     }
 }
 
-fn select_stream(streams: &[StreamInfo], sel: &ResolvedSelector) -> Result<u32> {
+pub(crate) fn select_stream(streams: &[StreamInfo], sel: &ResolvedSelector) -> Result<u32> {
     let filtered: Vec<&StreamInfo> = streams
         .iter()
         .filter(|s| match sel.kind {
@@ -704,7 +829,7 @@ fn select_stream(streams: &[StreamInfo], sel: &ResolvedSelector) -> Result<u32> 
     Ok(picked.index)
 }
 
-fn ext_from_uri(uri: &str) -> Option<String> {
+pub(crate) fn ext_from_uri(uri: &str) -> Option<String> {
     let last = uri.rsplit('/').next().unwrap_or(uri);
     let last = last.split('?').next().unwrap_or(last);
     let dot = last.rfind('.')?;
@@ -723,7 +848,7 @@ pub struct ExecutorStats {
 }
 
 impl ExecutorStats {
-    fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge(&mut self, other: &Self) {
         self.packets_read += other.packets_read;
         self.packets_copied += other.packets_copied;
         self.packets_encoded += other.packets_encoded;

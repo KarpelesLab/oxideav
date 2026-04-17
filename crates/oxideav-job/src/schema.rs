@@ -20,6 +20,11 @@ pub struct Job {
     /// Named intermediate aliases (keys starting with `@` that are not
     /// reserved sink names).
     pub aliases: IndexMap<String, OutputSpec>,
+    /// Advisory thread budget for the executor. `None` = auto-detect
+    /// (use the number of logical CPUs). `Some(1)` forces the serial
+    /// executor; `Some(n)` with n ≥ 2 requests pipelined execution.
+    /// Explicit CLI overrides (`Executor::with_threads`) take precedence.
+    pub threads: Option<usize>,
 }
 
 /// Per-file/per-alias spec: track lists grouped by media type.
@@ -186,7 +191,24 @@ impl Job {
             .as_object()
             .ok_or_else(|| Error::invalid("job: top level must be an object"))?;
         let mut job = Job::default();
+        // Reserved meta keys — they describe the job itself rather than
+        // a named alias or output. Pulled off before the walker runs so
+        // parse errors on them give precise messages.
+        if let Some(t) = obj.get("threads") {
+            let n = t
+                .as_u64()
+                .ok_or_else(|| Error::invalid("job: `threads` must be a non-negative integer"))?;
+            if n == 0 {
+                return Err(Error::invalid(
+                    "job: `threads` must be ≥ 1 (use CLI `--threads 0` for auto)",
+                ));
+            }
+            job.threads = Some(n as usize);
+        }
         for (key, val) in obj {
+            if is_meta_key(key) {
+                continue;
+            }
             let spec: OutputSpec = serde_json::from_value(val.clone())
                 .map_err(|e| Error::invalid(format!("job: {key}: {e}")))?;
             if key.is_empty() {
@@ -217,6 +239,14 @@ impl Job {
 /// True when the given top-level key is a reserved sink name.
 pub fn is_reserved_sink(name: &str) -> bool {
     RESERVED_SINKS.contains(&name)
+}
+
+/// Keys reserved for job metadata (not outputs or aliases). Pulled off
+/// the top-level object before the output/alias walk.
+const META_KEYS: &[&str] = &["threads"];
+
+fn is_meta_key(name: &str) -> bool {
+    META_KEYS.contains(&name)
 }
 
 #[cfg(test)]
@@ -290,6 +320,24 @@ mod tests {
         .unwrap();
         let sel = j.outputs["o.wav"].audio[0].stream_selector.as_ref().unwrap();
         assert_eq!(sel.kind, Some(MediaType::Subtitle));
+    }
+
+    #[test]
+    fn parses_threads_meta_key() {
+        let j = Job::from_json(
+            r#"{"threads": 4, "out.wav": {"audio": [{"from": "in.wav"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(j.threads, Some(4));
+        assert_eq!(j.outputs.len(), 1);
+        assert!(j.aliases.is_empty());
+    }
+
+    #[test]
+    fn rejects_zero_threads() {
+        let e = Job::from_json(r#"{"threads": 0, "out.wav": {"audio": []}}"#).unwrap_err();
+        let msg = format!("{e}");
+        assert!(msg.contains("≥ 1") || msg.contains(">= 1"), "got: {msg}");
     }
 
     #[test]
