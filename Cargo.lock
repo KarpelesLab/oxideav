@@ -485,7 +485,6 @@ version = "0.0.3"
 dependencies = [
  "oxideav-container",
  "oxideav-core",
- "oxideav-mjpeg",
 ]
 
 [[package]]
@@ -548,9 +547,7 @@ name = "oxideav-ffv1"
 version = "0.0.3"
 dependencies = [
  "oxideav-codec",
- "oxideav-container",
  "oxideav-core",
- "oxideav-mkv",
 ]
 
 [[package]]
@@ -678,7 +675,6 @@ version = "0.0.3"
 dependencies = [
  "indexmap",
  "oxideav-audio-filter",
- "oxideav-basic",
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
@@ -763,12 +759,9 @@ dependencies = [
 name = "oxideav-mp4"
 version = "0.0.3"
 dependencies = [
- "oxideav-basic",
  "oxideav-codec",
  "oxideav-container",
  "oxideav-core",
- "oxideav-flac",
- "oxideav-mjpeg",
 ]
 
 [[package]]
@@ -802,9 +795,7 @@ version = "0.0.3"
 dependencies = [
  "oxideav-celt",
  "oxideav-codec",
- "oxideav-container",
  "oxideav-core",
- "oxideav-ogg",
 ]
 
 [[package]]
@@ -864,9 +855,7 @@ name = "oxideav-speex"
 version = "0.0.3"
 dependencies = [
  "oxideav-codec",
- "oxideav-container",
  "oxideav-core",
- "oxideav-ogg",
 ]
 
 [[package]]
@@ -941,7 +930,6 @@ version = "0.0.3"
 dependencies = [
  "oxideav-codec",
  "oxideav-core",
- "oxideav-mp4",
 ]
 
 [[package]]

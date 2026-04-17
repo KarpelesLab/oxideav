@@ -1,52 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/oxideav-pipeline",
-    "crates/oxideav-basic",
-    "crates/oxideav-ogg",
-    "crates/oxideav-vorbis",
-    "crates/oxideav-opus",
-    "crates/oxideav-flac",
-    "crates/oxideav-mkv",
-    "crates/oxideav-mp4",
-    "crates/oxideav-avi",
-    "crates/oxideav-mjpeg",
-    "crates/oxideav-mpeg1video",
-    "crates/oxideav-vp9",
-    "crates/oxideav-h265",
-    "crates/oxideav-h264",
-    "crates/oxideav-av1",
-    "crates/oxideav-h263",
-    "crates/oxideav-vp8",
-    "crates/oxideav-audio-filter",
-    "crates/oxideav-mpeg4video",
-    "crates/oxideav-theora",
-    "crates/oxideav-iff",
-    "crates/oxideav-mod",
-    "crates/oxideav-s3m",
-    "crates/oxideav-mp2",
-    "crates/oxideav-mp3",
-    "crates/oxideav-id3",
-    "crates/oxideav-aac",
-    "crates/oxideav-celt",
-    "crates/oxideav-g722",
-    "crates/oxideav-g7231",
-    "crates/oxideav-g729",
-    "crates/oxideav-speex",
-    "crates/oxideav-webp",
-    "crates/oxideav-png",
-    "crates/oxideav-amv",
-    "crates/oxideav-subtitle",
-    "crates/oxideav-sub-image",
-    "crates/oxideav-ass",
-    "crates/oxideav-ffv1",
-    "crates/oxideav-prores",
-    "crates/oxideav-jpegxl",
-    "crates/oxideav-jpeg2000",
-    "crates/oxideav-avif",
-    "crates/oxideav-source",
-    "crates/oxideav-http",
-    "crates/oxideav-job",
     "crates/oxideav",
     "crates/oxideav-cli",
     "crates/oxideplay",
@@ -64,61 +18,68 @@ authors = ["Mark Karpeles"]
 readme = "README.md"
 
 [workspace.dependencies]
+# Every per-format codec, container, filter, source driver, and codec-trait
+# crate now lives in its own OxideAV/* repository and is consumed from
+# crates.io (or a local sibling via scripts/dev-patch.sh). Pins use "0.0"
+# so patch-level bumps in the infra crates don't force a re-publish here.
 oxideav-core = "0.0"
 oxideav-codec = "0.0"
 oxideav-container = "0.0"
-oxideav-pipeline = { path = "crates/oxideav-pipeline", version = "0.0.3" }
-oxideav-basic = { path = "crates/oxideav-basic", version = "0.0.3" }
-oxideav-ogg = { path = "crates/oxideav-ogg", version = "0.0.3" }
-oxideav-vorbis = { path = "crates/oxideav-vorbis", version = "0.0.3" }
-oxideav-opus = { path = "crates/oxideav-opus", version = "0.0.3" }
-oxideav-ffv1 = { path = "crates/oxideav-ffv1", version = "0.0.3" }
-oxideav-flac = { path = "crates/oxideav-flac", version = "0.0.3" }
-oxideav-mkv = { path = "crates/oxideav-mkv", version = "0.0.3" }
-oxideav-mp4 = { path = "crates/oxideav-mp4", version = "0.0.3" }
-oxideav-avi = { path = "crates/oxideav-avi", version = "0.0.3" }
-oxideav-mjpeg = { path = "crates/oxideav-mjpeg", version = "0.0.3" }
-oxideav-mpeg1video = { path = "crates/oxideav-mpeg1video", version = "0.0.3" }
-oxideav-vp9 = { path = "crates/oxideav-vp9", version = "0.0.3" }
-oxideav-h265 = { path = "crates/oxideav-h265", version = "0.0.3" }
-oxideav-h264 = { path = "crates/oxideav-h264", version = "0.0.3" }
-oxideav-av1 = { path = "crates/oxideav-av1", version = "0.0.3" }
-oxideav-h263 = { path = "crates/oxideav-h263", version = "0.0.3" }
-oxideav-vp8 = { path = "crates/oxideav-vp8", version = "0.0.3" }
-oxideav-audio-filter = { path = "crates/oxideav-audio-filter", version = "0.0.3" }
+oxideav-pipeline = "0.0"
+oxideav-basic = "0.0"
+oxideav-ogg = "0.0"
+oxideav-vorbis = "0.0"
+oxideav-opus = "0.0"
+oxideav-ffv1 = "0.0"
+oxideav-flac = "0.0"
+oxideav-mkv = "0.0"
+oxideav-mp4 = "0.0"
+oxideav-avi = "0.0"
+oxideav-mjpeg = "0.0"
+oxideav-mpeg1video = "0.0"
+oxideav-vp9 = "0.0"
+oxideav-h265 = "0.0"
+oxideav-h264 = "0.0"
+oxideav-av1 = "0.0"
+oxideav-h263 = "0.0"
+oxideav-vp8 = "0.0"
+oxideav-audio-filter = "0.0"
 oxideav-pixfmt = "0.0"
-oxideav-mpeg4video = { path = "crates/oxideav-mpeg4video", version = "0.0.3" }
-oxideav-theora = { path = "crates/oxideav-theora", version = "0.0.3" }
-oxideav-iff = { path = "crates/oxideav-iff", version = "0.0.3" }
-oxideav-mod = { path = "crates/oxideav-mod", version = "0.0.3" }
-oxideav-s3m = { path = "crates/oxideav-s3m", version = "0.0.3" }
-oxideav-mp1 = "0.0.3"
-oxideav-mp2 = { path = "crates/oxideav-mp2", version = "0.0.3" }
-oxideav-mp3 = { path = "crates/oxideav-mp3", version = "0.0.3" }
-oxideav-id3 = { path = "crates/oxideav-id3", version = "0.0.3" }
-oxideav-aac = { path = "crates/oxideav-aac", version = "0.0.3" }
-oxideav-celt = { path = "crates/oxideav-celt", version = "0.0.3" }
-oxideav-g7231 = { path = "crates/oxideav-g7231", version = "0.0.3" }
-oxideav-g728 = "0.0.3"
-oxideav-g729 = { path = "crates/oxideav-g729", version = "0.0.3" }
-oxideav-g711 = "0.0.3"
-oxideav-g722 = { path = "crates/oxideav-g722", version = "0.0.3" }
-oxideav-gsm = "0.0.3"
-oxideav-speex = { path = "crates/oxideav-speex", version = "0.0.3" }
-oxideav-webp = { path = "crates/oxideav-webp", version = "0.0.3" }
-oxideav-gif = "0.0.3"
-oxideav-png = { path = "crates/oxideav-png", version = "0.0.3" }
-oxideav-amv = { path = "crates/oxideav-amv", version = "0.0.3" }
-oxideav-subtitle = { path = "crates/oxideav-subtitle", version = "0.0.3" }
-oxideav-sub-image = { path = "crates/oxideav-sub-image", version = "0.0.3" }
-oxideav-ass = { path = "crates/oxideav-ass", version = "0.0.3" }
-oxideav-prores = { path = "crates/oxideav-prores", version = "0.0.3" }
-oxideav-jpegxl = { path = "crates/oxideav-jpegxl", version = "0.0.3" }
-oxideav-jpeg2000 = { path = "crates/oxideav-jpeg2000", version = "0.0.3" }
-oxideav-avif = { path = "crates/oxideav-avif", version = "0.0.3" }
-oxideav-source = { path = "crates/oxideav-source", version = "0.0.3" }
-oxideav-http = { path = "crates/oxideav-http", version = "0.0.3" }
-oxideav-job = { path = "crates/oxideav-job", version = "0.0.3" }
+oxideav-mpeg4video = "0.0"
+oxideav-theora = "0.0"
+oxideav-iff = "0.0"
+oxideav-mod = "0.0"
+oxideav-s3m = "0.0"
+oxideav-mp1 = "0.0"
+oxideav-mp2 = "0.0"
+oxideav-mp3 = "0.0"
+oxideav-id3 = "0.0"
+oxideav-aac = "0.0"
+oxideav-celt = "0.0"
+oxideav-g7231 = "0.0"
+oxideav-g728 = "0.0"
+oxideav-g729 = "0.0"
+oxideav-g711 = "0.0"
+oxideav-g722 = "0.0"
+oxideav-gsm = "0.0"
+oxideav-speex = "0.0"
+oxideav-webp = "0.0"
+oxideav-gif = "0.0"
+oxideav-png = "0.0"
+oxideav-amv = "0.0"
+oxideav-subtitle = "0.0"
+oxideav-sub-image = "0.0"
+oxideav-ass = "0.0"
+oxideav-prores = "0.0"
+oxideav-jpegxl = "0.0"
+oxideav-jpeg2000 = "0.0"
+oxideav-avif = "0.0"
+oxideav-source = "0.0"
+oxideav-http = "0.0"
+oxideav-job = "0.0"
+
+# The aggregator crate stays in this workspace (it's the "everything
+# wired up" entry point for the CLI / player / integration tests).
 oxideav = { path = "crates/oxideav", version = "0.0.3" }
 
 thiserror = "1"
