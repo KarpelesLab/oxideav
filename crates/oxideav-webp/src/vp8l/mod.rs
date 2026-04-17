@@ -23,8 +23,11 @@
 //! exercise each independently.
 
 pub mod bit_reader;
+pub mod encoder;
 pub mod huffman;
 pub mod transform;
+
+pub use encoder::encode_vp8l_argb;
 
 use oxideav_core::{Error, Result};
 

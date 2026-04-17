@@ -19,7 +19,10 @@
 //!   matching PTS/duration expressed in milliseconds. Frame disposal and
 //!   blending modes are honoured against an internal RGBA canvas.
 //!
-//! Encoding is explicitly out of scope for this release.
+//! VP8L lossless encoding is supported through [`encoder::make_encoder`]
+//! — a minimal-but-correct pure-Rust encoder (length-limited Huffman +
+//! 4 KB-window LZ77, no transforms). VP8 lossy encoding is still out of
+//! scope.
 
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
@@ -29,9 +32,10 @@
 
 pub mod decoder;
 pub mod demux;
+pub mod encoder;
 pub mod vp8l;
 
-use oxideav_codec::{CodecRegistry, Decoder};
+use oxideav_codec::{CodecRegistry, Decoder, Encoder};
 use oxideav_container::ContainerRegistry;
 use oxideav_core::{CodecCapabilities, CodecId, CodecParameters, Result};
 
@@ -46,7 +50,7 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
         .with_intra_only(true)
         .with_lossless(true)
         .with_max_size(16384, 16384);
-    reg.register_decoder_impl(cid, caps, make_vp8l_decoder);
+    reg.register_both(cid, caps, make_vp8l_decoder, make_vp8l_encoder);
 }
 
 /// Register the WebP container demuxer + the `.webp` extension + its probe.
@@ -65,4 +69,9 @@ fn make_vp8l_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     decoder::make_vp8l_decoder(params)
 }
 
+fn make_vp8l_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
+    encoder::make_encoder(params)
+}
+
 pub use decoder::{decode_webp, WebpFrame, WebpImage};
+pub use vp8l::encode_vp8l_argb;
