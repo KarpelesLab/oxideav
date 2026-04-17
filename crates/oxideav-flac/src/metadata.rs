@@ -73,6 +73,46 @@ pub struct StreamInfo {
     pub md5: [u8; 16],
 }
 
+/// A single entry in a FLAC SEEKTABLE (§SEEKPOINT). Placeholder
+/// entries (`sample_number == 0xFFFF_FFFF_FFFF_FFFF`) are filtered
+/// out at parse time so callers never see them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeekPoint {
+    /// Sample number of the first sample in the target frame.
+    pub sample_number: u64,
+    /// Byte offset, from the first byte of the first frame in the
+    /// stream, of the target frame.
+    pub offset: u64,
+    /// Number of samples in the target frame.
+    pub frame_samples: u16,
+}
+
+/// Parse a FLAC SEEKTABLE block payload into a vector of valid
+/// (non-placeholder) seek points. Each wire-format SEEKPOINT is 18
+/// bytes: `sample_number: u64 BE`, `offset: u64 BE`, `frame_samples:
+/// u16 BE`. A payload whose length isn't a multiple of 18 has its
+/// trailing bytes ignored (same shape as libFLAC's tolerant parser).
+pub fn parse_seektable(bytes: &[u8]) -> Vec<SeekPoint> {
+    const PLACEHOLDER: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    let n = bytes.len() / 18;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let off = i * 18;
+        let sample_number = u64::from_be_bytes(bytes[off..off + 8].try_into().expect("8 bytes"));
+        if sample_number == PLACEHOLDER {
+            continue;
+        }
+        let offset = u64::from_be_bytes(bytes[off + 8..off + 16].try_into().expect("8 bytes"));
+        let frame_samples = u16::from_be_bytes([bytes[off + 16], bytes[off + 17]]);
+        out.push(SeekPoint {
+            sample_number,
+            offset,
+            frame_samples,
+        });
+    }
+    out
+}
+
 impl StreamInfo {
     /// Parse a STREAMINFO block. The block payload is exactly 34 bytes.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
@@ -127,6 +167,31 @@ mod tests {
         assert_eq!(info.channels, 2);
         assert_eq!(info.bits_per_sample, 16);
         assert_eq!(info.total_samples, 96_000);
+    }
+
+    #[test]
+    fn seektable_parses_and_drops_placeholders() {
+        let mut buf = Vec::new();
+        // real point: sample 0, offset 0, frame_samples 4096
+        buf.extend_from_slice(&0u64.to_be_bytes());
+        buf.extend_from_slice(&0u64.to_be_bytes());
+        buf.extend_from_slice(&4096u16.to_be_bytes());
+        // placeholder
+        buf.extend_from_slice(&0xFFFF_FFFF_FFFF_FFFFu64.to_be_bytes());
+        buf.extend_from_slice(&0u64.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        // real point: sample 8192, offset 1234, frame_samples 4096
+        buf.extend_from_slice(&8192u64.to_be_bytes());
+        buf.extend_from_slice(&1234u64.to_be_bytes());
+        buf.extend_from_slice(&4096u16.to_be_bytes());
+
+        let sps = parse_seektable(&buf);
+        assert_eq!(sps.len(), 2);
+        assert_eq!(sps[0].sample_number, 0);
+        assert_eq!(sps[0].offset, 0);
+        assert_eq!(sps[0].frame_samples, 4096);
+        assert_eq!(sps[1].sample_number, 8192);
+        assert_eq!(sps[1].offset, 1234);
     }
 
     #[test]

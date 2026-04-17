@@ -10,7 +10,7 @@
 //! variable-length frame header in detail. The decoder (forthcoming) will do
 //! that work.
 
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 
 use oxideav_container::{Demuxer, Muxer, ReadSeek, WriteSeek};
 use oxideav_core::{
@@ -19,7 +19,9 @@ use oxideav_core::{
 };
 
 use crate::frame::{parse_frame_header, FrameHeader};
-use crate::metadata::{BlockHeader, BlockType, StreamInfo as Si, FLAC_MAGIC};
+use crate::metadata::{
+    parse_seektable, BlockHeader, BlockType, SeekPoint, StreamInfo as Si, FLAC_MAGIC,
+};
 
 pub fn register(reg: &mut oxideav_container::ContainerRegistry) {
     reg.register_demuxer("flac", open_demuxer);
@@ -62,6 +64,7 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
 
     let mut extradata = Vec::new();
     let mut streaminfo: Option<Si> = None;
+    let mut seek_points: Vec<SeekPoint> = Vec::new();
     loop {
         let mut hdr = [0u8; 4];
         input.read_exact(&mut hdr)?;
@@ -70,6 +73,12 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         input.read_exact(&mut payload)?;
         if streaminfo.is_none() && parsed.block_type == BlockType::StreamInfo {
             streaminfo = Some(Si::parse(&payload)?);
+        }
+        if parsed.block_type == BlockType::SeekTable {
+            // Only the first SEEKTABLE is meaningful per spec.
+            if seek_points.is_empty() {
+                seek_points = parse_seektable(&payload);
+            }
         }
         if parsed.block_type == BlockType::VorbisComment {
             parse_vorbis_comment(&payload, &mut metadata);
@@ -86,6 +95,11 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         }
     }
     let info = streaminfo.ok_or_else(|| Error::invalid("FLAC stream missing STREAMINFO block"))?;
+
+    // Byte position immediately after the final metadata block — this
+    // is where the frame stream begins. The demuxer's seek_to adds the
+    // SEEKPOINT's offset to this value to land on a frame boundary.
+    let first_frame_offset = input.stream_position()?;
 
     let sample_format = match info.bits_per_sample {
         8 => SampleFormat::U8,
@@ -134,6 +148,8 @@ fn open_demuxer(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         metadata,
         pictures,
         duration_micros,
+        seek_points,
+        first_frame_offset,
     }))
 }
 
@@ -300,6 +316,12 @@ struct FlacDemuxer {
     metadata: Vec<(String, String)>,
     pictures: Vec<AttachedPicture>,
     duration_micros: i64,
+    /// Parsed SEEKTABLE entries (placeholders filtered out). Empty if
+    /// the file carried no SEEKTABLE block.
+    seek_points: Vec<SeekPoint>,
+    /// Byte offset of the first frame in the stream (immediately
+    /// after the metadata-block sequence).
+    first_frame_offset: u64,
 }
 
 /// Buffered FLAC frame scanner.
@@ -405,6 +427,19 @@ impl FrameScanner {
             self.head = 0;
         }
     }
+
+    /// Drop any buffered bytes and forget the anchored head-frame so
+    /// that subsequent `try_take` calls re-scan from the post-seek
+    /// stream position. `samples_emitted` is forced to
+    /// `anchor_sample`, which the scanner uses as a ground-truth pts
+    /// for variable-blocking frames (and for the `samples_emitted`
+    /// accounting).
+    fn reset_to(&mut self, anchor_sample: u64) {
+        self.buffer.clear();
+        self.head = 0;
+        self.head_frame = None;
+        self.samples_emitted = anchor_sample;
+    }
 }
 
 struct EmittedFrame {
@@ -448,6 +483,39 @@ impl Demuxer for FlacDemuxer {
                 self.scan.buffer.extend_from_slice(&chunk[..n]);
             }
         }
+    }
+
+    fn seek_to(&mut self, stream_index: u32, pts: i64) -> Result<i64> {
+        if stream_index != 0 {
+            return Err(Error::invalid(format!(
+                "FLAC: stream index {stream_index} out of range (only stream 0 exists)"
+            )));
+        }
+        if self.seek_points.is_empty() {
+            return Err(Error::unsupported(
+                "FLAC: file has no SEEKTABLE metadata block; cannot seek",
+            ));
+        }
+        let target = pts.max(0) as u64;
+        // Binary-search for the last SeekPoint with sample_number <= target.
+        // partition_point returns the first index where the predicate is
+        // false, so `idx - 1` is our candidate.
+        let idx = self
+            .seek_points
+            .partition_point(|sp| sp.sample_number <= target);
+        let (anchor_sample, byte_offset) = if idx == 0 {
+            // Target is before the first seek point — land on sample 0
+            // at the start of the frame stream.
+            (0u64, 0u64)
+        } else {
+            let sp = &self.seek_points[idx - 1];
+            (sp.sample_number, sp.offset)
+        };
+        self.input
+            .seek(SeekFrom::Start(self.first_frame_offset + byte_offset))?;
+        self.scan.reset_to(anchor_sample);
+        self.eof = false;
+        Ok(anchor_sample as i64)
     }
 
     fn metadata(&self) -> &[(String, String)] {

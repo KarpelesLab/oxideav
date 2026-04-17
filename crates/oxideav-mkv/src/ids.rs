@@ -78,6 +78,16 @@ pub const BLOCK: u32 = 0xA1;
 pub const BLOCK_DURATION: u32 = 0x9B;
 pub const REFERENCE_BLOCK: u32 = 0xFB;
 
+// Cues (seek index).
+pub const CUE_POINT: u32 = 0xBB;
+pub const CUE_TIME: u32 = 0xB3;
+pub const CUE_TRACK_POSITIONS: u32 = 0xB7;
+pub const CUE_TRACK: u32 = 0xF7;
+pub const CUE_CLUSTER_POSITION: u32 = 0xF1;
+pub const CUE_RELATIVE_POSITION: u32 = 0xF0;
+pub const CUE_DURATION: u32 = 0xB2;
+pub const CUE_BLOCK_NUMBER: u32 = 0x5378;
+
 // TrackType values.
 pub const TRACK_TYPE_VIDEO: u64 = 1;
 pub const TRACK_TYPE_AUDIO: u64 = 2;

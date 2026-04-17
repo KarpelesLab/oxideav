@@ -68,6 +68,7 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     let mut tracks: Vec<TrackEntry> = Vec::new();
     let mut first_cluster_offset: Option<u64> = None;
     let mut metadata: Vec<(String, String)> = Vec::new();
+    let mut cues: Vec<CueEntry> = Vec::new();
 
     while input.stream_position()? < segment_data_end {
         let e = read_element_header(&mut *input)?;
@@ -90,6 +91,10 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
                 let end = body_end_known.unwrap_or(segment_data_end);
                 parse_tags(&mut *input, end, &mut metadata)?;
             }
+            ids::CUES => {
+                let end = body_end_known.unwrap_or(segment_data_end);
+                parse_cues(&mut *input, end, &mut cues)?;
+            }
             ids::CLUSTER => {
                 if first_cluster_offset.is_none() {
                     first_cluster_offset = Some(body_start - e.header_len as u64);
@@ -108,6 +113,25 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
             }
         }
     }
+
+    // Cues are often written after the final Cluster — if we haven't seen
+    // them yet and the segment size is known, scan from the first cluster
+    // to segment end looking for a top-level Cues element. We keep this
+    // best-effort: any I/O error or parse problem leaves `cues` empty
+    // and falls back to Unsupported at seek time.
+    if cues.is_empty() {
+        if let Some(first_cluster) = first_cluster_offset {
+            let resume_pos = input.stream_position()?;
+            if scan_cues_from(&mut *input, first_cluster, segment_data_end, &mut cues).is_err() {
+                cues.clear();
+            }
+            // Restore reader position to the first cluster for next_packet().
+            input.seek(SeekFrom::Start(resume_pos))?;
+        }
+    }
+
+    // Sort cues by (track, time) for stable lookup.
+    cues.sort_by(|a, b| a.track.cmp(&b.track).then(a.time.cmp(&b.time)));
 
     if tracks.is_empty() {
         return Err(Error::invalid("MKV: no tracks found"));
@@ -194,16 +218,26 @@ pub fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
         0
     };
 
+    // Build reverse map: stream index → MKV TrackNumber.
+    let mut track_number_by_index: Vec<u64> = vec![0; streams.len()];
+    for (num, &idx) in &track_index_by_number {
+        track_number_by_index[idx as usize] = *num;
+    }
+
     Ok(Box::new(MkvDemuxer {
         input,
         streams,
         track_index_by_number,
+        track_number_by_index,
+        segment_data_start,
         segment_data_end,
         cluster_state: ClusterState::Idle,
         out_queue: std::collections::VecDeque::new(),
         time_base,
         metadata,
         duration_micros,
+        cues,
+        timecode_scale_ns,
     }))
 }
 
@@ -352,6 +386,115 @@ fn civil_from_days_seconds(unix_secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     (year, m, d, hh, mm, ss)
 }
 
+/// One Cues → CuePoint entry, denormalised to (track, time, cluster_offset)
+/// where `cluster_offset` is a byte offset relative to the Segment payload
+/// start (i.e. add it to `segment_data_start` to get an absolute file pos).
+#[derive(Clone, Debug)]
+struct CueEntry {
+    track: u64,
+    /// Timestamp in Matroska ticks (timecode_scale ns per tick).
+    time: u64,
+    cluster_offset: u64,
+}
+
+fn parse_cues(r: &mut dyn ReadSeek, end: u64, out: &mut Vec<CueEntry>) -> Result<()> {
+    while r.stream_position()? < end {
+        let e = read_element_header(r)?;
+        match e.id {
+            ids::CUE_POINT => {
+                let body_end = r.stream_position()? + e.size;
+                parse_cue_point(r, body_end, out)?;
+            }
+            _ => skip(r, e.size)?,
+        }
+    }
+    Ok(())
+}
+
+fn parse_cue_point(r: &mut dyn ReadSeek, end: u64, out: &mut Vec<CueEntry>) -> Result<()> {
+    let mut time: u64 = 0;
+    while r.stream_position()? < end {
+        let e = read_element_header(r)?;
+        match e.id {
+            ids::CUE_TIME => time = read_uint(r, e.size as usize)?,
+            ids::CUE_TRACK_POSITIONS => {
+                let body_end = r.stream_position()? + e.size;
+                parse_cue_track_positions(r, body_end, time, out)?;
+            }
+            _ => skip(r, e.size)?,
+        }
+    }
+    Ok(())
+}
+
+fn parse_cue_track_positions(
+    r: &mut dyn ReadSeek,
+    end: u64,
+    time: u64,
+    out: &mut Vec<CueEntry>,
+) -> Result<()> {
+    let mut track: u64 = 0;
+    let mut cluster_offset: Option<u64> = None;
+    while r.stream_position()? < end {
+        let e = read_element_header(r)?;
+        match e.id {
+            ids::CUE_TRACK => track = read_uint(r, e.size as usize)?,
+            ids::CUE_CLUSTER_POSITION => cluster_offset = Some(read_uint(r, e.size as usize)?),
+            _ => skip(r, e.size)?,
+        }
+    }
+    if let Some(off) = cluster_offset {
+        out.push(CueEntry {
+            track,
+            time,
+            cluster_offset: off,
+        });
+    }
+    Ok(())
+}
+
+/// Best-effort scan of the byte range `[start, end)` looking for a top-level
+/// Cues element whose header we can find intact. Used when the Cues element
+/// appears after the last Cluster in the file (the common ffmpeg layout
+/// when muxing in a single pass with index-at-end).
+fn scan_cues_from(
+    r: &mut dyn ReadSeek,
+    start: u64,
+    end: u64,
+    out: &mut Vec<CueEntry>,
+) -> Result<()> {
+    r.seek(SeekFrom::Start(start))?;
+    while r.stream_position()? < end {
+        let pos = r.stream_position()?;
+        let e = read_element_header(r)?;
+        let body_start = r.stream_position()?;
+        let body_end = if e.size == VINT_UNKNOWN_SIZE {
+            end
+        } else {
+            body_start + e.size
+        };
+        if body_end > end {
+            // Truncated or invalid — abort scan.
+            r.seek(SeekFrom::Start(pos))?;
+            return Ok(());
+        }
+        match e.id {
+            ids::CUES => {
+                parse_cues(r, body_end, out)?;
+                return Ok(());
+            }
+            _ => {
+                if e.size == VINT_UNKNOWN_SIZE {
+                    // Can't blindly skip unknown-size elements that aren't Cues.
+                    return Ok(());
+                }
+                r.seek(SeekFrom::Start(body_end))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_tracks(r: &mut dyn ReadSeek, end: u64, out: &mut Vec<TrackEntry>) -> Result<()> {
     while r.stream_position()? < end {
         let e = read_element_header(r)?;
@@ -431,12 +574,25 @@ struct MkvDemuxer {
     input: Box<dyn ReadSeek>,
     streams: Vec<StreamInfo>,
     track_index_by_number: std::collections::HashMap<u64, u32>,
+    /// Reverse of `track_index_by_number`: stream index → MKV TrackNumber.
+    track_number_by_index: Vec<u64>,
+    /// Byte offset of the Segment payload start (immediately after the
+    /// Segment element's header). Cue `cluster_offset` values are relative
+    /// to this position.
+    segment_data_start: u64,
     segment_data_end: u64,
     cluster_state: ClusterState,
     out_queue: std::collections::VecDeque<Packet>,
     time_base: TimeBase,
     metadata: Vec<(String, String)>,
     duration_micros: i64,
+    /// Cue index entries, sorted by (track, time). Empty if the file has
+    /// no Cues element — `seek_to` returns `Error::Unsupported` in that
+    /// case.
+    cues: Vec<CueEntry>,
+    /// Nanoseconds per Matroska timecode tick (the Segment\Info\TimecodeScale
+    /// value, defaulted to 1_000_000 when absent).
+    timecode_scale_ns: u64,
 }
 
 impl Demuxer for MkvDemuxer {
@@ -467,6 +623,84 @@ impl Demuxer for MkvDemuxer {
         } else {
             None
         }
+    }
+
+    fn seek_to(&mut self, stream_index: u32, pts: i64) -> Result<i64> {
+        if stream_index as usize >= self.streams.len() {
+            return Err(Error::invalid(format!(
+                "MKV: stream index {stream_index} out of range"
+            )));
+        }
+        if self.cues.is_empty() {
+            return Err(Error::unsupported(
+                "MKV: no Cues index in file — cannot seek",
+            ));
+        }
+        let track_number = self.track_number_by_index[stream_index as usize];
+
+        // Convert the stream's pts → Matroska ticks.
+        //   pts_seconds  = pts * stream.time_base.num / stream.time_base.den
+        //   ticks        = pts_seconds * 1e9 / timecode_scale_ns
+        //                = pts * num * 1e9 / (den * timecode_scale_ns)
+        // Every stream in this demuxer currently exposes the segment time
+        // base (timecode_scale_ns / 1e9), so the conversion collapses to
+        // a copy — but we still do the full calculation so behaviour is
+        // correct when other time bases are supplied.
+        let stream_tb = self.streams[stream_index as usize].time_base.as_rational();
+        let target_ticks_i128: i128 = if stream_tb.num == 0 || stream_tb.den == 0 {
+            pts as i128
+        } else {
+            let numer = pts as i128 * stream_tb.num as i128 * 1_000_000_000i128;
+            let denom = stream_tb.den as i128 * self.timecode_scale_ns as i128;
+            if denom == 0 {
+                pts as i128
+            } else {
+                numer / denom
+            }
+        };
+        let target_ticks: u64 = target_ticks_i128.max(0) as u64;
+
+        // Find last cue entry for this track with time <= target_ticks.
+        // Cues are sorted by (track, time); use a manual scan of the
+        // contiguous track block to keep the code obvious and panic-free.
+        let mut best: Option<&CueEntry> = None;
+        for c in self.cues.iter().filter(|c| c.track == track_number) {
+            if c.time <= target_ticks {
+                best = Some(c);
+            } else {
+                break;
+            }
+        }
+        // If target is before the first cue, fall back to the first cue
+        // for this track (seek returns the actual landed pts).
+        if best.is_none() {
+            best = self.cues.iter().find(|c| c.track == track_number);
+        }
+        let cue = best.ok_or_else(|| {
+            Error::unsupported(format!(
+                "MKV: no Cues entries for track {track_number} (stream {stream_index})"
+            ))
+        })?;
+
+        let abs = self.segment_data_start + cue.cluster_offset;
+        self.input.seek(SeekFrom::Start(abs))?;
+        // Reset cluster reader state + any previously queued packets.
+        self.cluster_state = ClusterState::Idle;
+        self.out_queue.clear();
+
+        // Convert the landed ticks back into the stream's time base.
+        let landed_pts: i64 = if stream_tb.num == 0 || stream_tb.den == 0 {
+            cue.time as i64
+        } else {
+            let numer = cue.time as i128 * stream_tb.den as i128 * self.timecode_scale_ns as i128;
+            let denom = stream_tb.num as i128 * 1_000_000_000i128;
+            if denom == 0 {
+                cue.time as i64
+            } else {
+                (numer / denom) as i64
+            }
+        };
+        Ok(landed_pts)
     }
 }
 
