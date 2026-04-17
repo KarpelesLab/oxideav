@@ -31,6 +31,13 @@ use crate::frame::parse_frame_header_any_layer;
 /// 256 KB worst-case ID3v2 tag plus padding).
 const MAX_HEADER_SCAN: usize = 1 << 18;
 
+/// Maximum bytes we'll skip between two audio frames when hunting for
+/// the next sync word. Covers mid-stream embedded tags, APE footers,
+/// loose padding, and small desync caused by framing quirks. Large
+/// enough to step over a 64 KB embedded APIC; small enough that we
+/// don't pretend a runaway file has audio content when it doesn't.
+const MAX_RESYNC_BYTES: usize = 64 * 1024;
+
 pub fn register(reg: &mut ContainerRegistry) {
     reg.register_demuxer("mp3", open);
     reg.register_extension("mp3", "mp3");
@@ -181,17 +188,17 @@ impl Demuxer for Mp3Demuxer {
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
-        let mut head = [0u8; 4];
-        let n = read_up_to(&mut self.input, &mut head)?;
-        if n < 4 {
-            return Err(Error::Eof);
-        }
-        // Tolerate stray non-sync bytes (e.g. ID3v1 trailer) by stopping
-        // at the first invalid header — most MP3 players do the same.
-        let hdr = match parse_frame_header_any_layer(&head) {
-            Ok(h) => h,
-            Err(_) => return Err(Error::Eof),
+        // Read 4 bytes at the expected frame boundary. If they don't parse
+        // as a valid MPEG audio header, resync: scan forward up to
+        // `MAX_RESYNC_BYTES` looking for the next sync word. MP3 files
+        // frequently contain embedded tags / padding / APE footers between
+        // audio frames — bailing on the first stray byte cuts playback off
+        // mid-track (this is what mpg123 / ffmpeg / VLC all do).
+        let head = match self.read_header_with_resync()? {
+            Some(h) => h,
+            None => return Err(Error::Eof),
         };
+        let hdr = parse_frame_header_any_layer(&head)?;
         let frame_bytes = match hdr.frame_bytes() {
             Some(b) => b as usize,
             None => return Err(Error::unsupported("MP3: free-format streams not supported")),
@@ -215,5 +222,44 @@ impl Demuxer for Mp3Demuxer {
         pkt.duration = Some(self.samples_per_frame);
         pkt.flags.keyframe = true;
         Ok(pkt)
+    }
+}
+
+impl Mp3Demuxer {
+    /// Read a 4-byte frame header from the current position. If the bytes
+    /// don't parse as a valid MPEG audio header, scan forward up to
+    /// [`MAX_RESYNC_BYTES`] looking for the next sync word. Returns
+    /// `Ok(None)` at EOF, `Ok(Some(header_bytes))` once a valid header
+    /// is positioned. Leaves the input cursor right after the returned
+    /// 4-byte header on success.
+    fn read_header_with_resync(&mut self) -> Result<Option<[u8; 4]>> {
+        let mut head = [0u8; 4];
+        let n = read_up_to(&mut self.input, &mut head)?;
+        if n < 4 {
+            return Ok(None);
+        }
+        if parse_frame_header_any_layer(&head).is_ok() {
+            return Ok(Some(head));
+        }
+        // Resync: byte-shift `head` through the stream until we find a
+        // valid sync. This is cheap relative to I/O and tolerates any
+        // mid-stream garbage up to the resync cap.
+        for _ in 0..MAX_RESYNC_BYTES {
+            head[0] = head[1];
+            head[1] = head[2];
+            head[2] = head[3];
+            let mut one = [0u8; 1];
+            let got = read_up_to(&mut self.input, &mut one)?;
+            if got < 1 {
+                return Ok(None);
+            }
+            head[3] = one[0];
+            if parse_frame_header_any_layer(&head).is_ok() {
+                return Ok(Some(head));
+            }
+        }
+        // Ran out of resync budget — report end-of-stream. Real mid-file
+        // garbage rarely exceeds a few KB; 64 KB is a generous cap.
+        Ok(None)
     }
 }
