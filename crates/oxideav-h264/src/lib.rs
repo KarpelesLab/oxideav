@@ -40,6 +40,7 @@
 #![allow(clippy::derivable_impls)]
 
 pub mod bitreader;
+pub mod cabac;
 pub mod cavlc;
 pub mod deblock;
 pub mod decoder;
