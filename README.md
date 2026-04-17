@@ -174,6 +174,32 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 </details>
 
 <details>
+<summary><strong>Subtitles</strong> (click to expand)</summary>
+
+All three formats parse to a unified IR (`SubtitleCue` with rich-text
+`Segment`s: bold / italic / underline / strike / color / font / voice /
+class / karaoke / timestamp / raw) so cross-format conversion preserves
+as much styling as each pair can represent.
+
+| Format | Parse | Write | Notes |
+|--------|:-----:|:-----:|-------|
+| **SRT** (SubRip) | ✅ | ✅ | `<b>/<i>/<u>/<s>`, `<font color>` hex + 17 named colors, `<font face size>` |
+| **WebVTT** | ✅ | ✅ | Header, STYLE ::cue(.class) blocks, REGION blocks, inline tags (b/i/u/c/v/lang/ruby/timestamp), cue settings (line/position/size/align) |
+| **ASS / SSA** | ✅ | ✅ | Script Info, V4+/V4 Styles (BGR+inverted-alpha colors), override tags (b/i/u/s/c/fn/fs/pos/an/k/kf/ko/N/n/h). Animated tags (\\t, \\fad, \\move, \\clip, \\fscx/y, \\frz, \\blur) preserved as opaque raw so text survives roundtrip |
+
+Cross-format transforms: `srt_to_webvtt`, `srt_to_ass`,
+`webvtt_to_srt`, `webvtt_to_ass`, `ass_to_srt`, `ass_to_webvtt`.
+Lossy downconversions strip what the target can't represent
+(positioning, karaoke timing, unsupported style attributes) but
+preserve `b/i/u/color` + line breaks everywhere.
+
+In-container subtitles (MKV / MP4 subtitle tracks) are a scoped
+follow-up — standalone `.srt` / `.vtt` / `.ass` / `.ssa` files work
+today through the normal container + codec registry.
+
+</details>
+
+<details>
 <summary><strong>Scaffolds</strong> — API registered, pixel/sample decode not yet implemented (click to expand)</summary>
 
 | Codec | Status |
