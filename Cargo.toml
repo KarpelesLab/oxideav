@@ -44,6 +44,7 @@ members = [
     "crates/oxideav",
     "crates/oxideav-cli",
     "crates/oxideplay",
+    "crates/oxideav-tests",
 ]
 
 [workspace.package]
@@ -63,6 +64,7 @@ oxideav-basic = { path = "crates/oxideav-basic", version = "0.0.1" }
 oxideav-ogg = { path = "crates/oxideav-ogg", version = "0.0.1" }
 oxideav-vorbis = { path = "crates/oxideav-vorbis", version = "0.0.1" }
 oxideav-opus = { path = "crates/oxideav-opus", version = "0.0.1" }
+oxideav-ffv1 = { path = "crates/oxideav-ffv1", version = "0.0.1" }
 oxideav-flac = { path = "crates/oxideav-flac", version = "0.0.1" }
 oxideav-mkv = { path = "crates/oxideav-mkv", version = "0.0.1" }
 oxideav-mp4 = { path = "crates/oxideav-mp4", version = "0.0.1" }

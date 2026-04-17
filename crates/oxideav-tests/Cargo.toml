@@ -1,0 +1,29 @@
+[package]
+name = "oxideav-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cross-codec roundtrip comparison tests against ffmpeg"
+publish = false
+
+[dependencies]
+oxideav = { workspace = true }
+oxideav-core = { workspace = true }
+oxideav-codec = { workspace = true }
+oxideav-container = { workspace = true }
+oxideav-flac = { workspace = true }
+oxideav-vorbis = { workspace = true }
+oxideav-mp3 = { workspace = true }
+oxideav-aac = { workspace = true }
+oxideav-gsm = { workspace = true }
+oxideav-mp1 = { workspace = true }
+oxideav-mp2 = { workspace = true }
+oxideav-speex = { workspace = true }
+oxideav-opus = { workspace = true }
+oxideav-ogg = { workspace = true }
+oxideav-mp4 = { workspace = true }
+oxideav-ffv1 = { workspace = true }
+oxideav-mkv = { workspace = true }
