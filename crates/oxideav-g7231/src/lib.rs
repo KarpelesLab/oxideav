@@ -173,6 +173,16 @@ impl Decoder for G7231Decoder {
         self.drained = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Scaffold decoder — no DSP state yet. Drop buffered output frames,
+        // clear drained flag, and restart PTS counter so post-seek output
+        // starts at PTS=0 rather than the pre-seek stream position.
+        self.pending.clear();
+        self.drained = false;
+        self.next_pts = 0;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

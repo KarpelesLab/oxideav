@@ -133,4 +133,19 @@ impl Decoder for G722Decoder {
         self.drained = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Wipe the two sub-band adaptive quantiser states (predictor memory,
+        // log-scale, pole/zero history) and the QMF synthesis filter history
+        // so the next packet decodes as if it were the first. Config fields
+        // (codec_id, time_base) are left untouched. `next_pts` is zeroed so
+        // auto-assigned PTS restart at 0 post-seek.
+        self.low = LowBand::new();
+        self.high = HighBand::new();
+        self.qmf = QmfSynthesis::new();
+        self.pending.clear();
+        self.drained = false;
+        self.next_pts = 0;
+        Ok(())
+    }
 }

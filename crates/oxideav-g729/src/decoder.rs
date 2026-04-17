@@ -251,6 +251,19 @@ impl Decoder for G729Decoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Wipe LPC MA-predictor state (lsp_prev etc.) and the full synthesis
+        // state (excitation history, synthesis filter memory, postfilter
+        // short-term + pitch + tilt memory, AGC gain, gain-log history).
+        // These all carry over between frames and would glitch the first
+        // ~1-2 frames after a seek if left.
+        self.lpc_state = LpcPredictorState::new();
+        self.syn = SynthesisState::new();
+        self.pending = None;
+        self.eof = false;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

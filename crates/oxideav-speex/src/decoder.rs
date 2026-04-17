@@ -165,6 +165,19 @@ impl Decoder for NbDecoderImpl {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Wipe the NB CELP synthesis state — LPC filter memory, excitation
+        // history, LSP/LSF history, pitch-gain history, innovation-gain
+        // predictor, perceptual weighting filter memory, postfilter state.
+        // All of these are carried across frames in `NbDecoder` and would
+        // cause audible "ramp-up" artefacts after a seek if left intact.
+        // Header / time_base are stream-level and untouched.
+        self.nb = NbDecoder::new();
+        self.pending = None;
+        self.eof = false;
+        Ok(())
+    }
 }
 
 // =====================================================================
@@ -276,6 +289,17 @@ impl Decoder for WbDecoderImpl {
 
     fn flush(&mut self) -> Result<()> {
         self.eof = true;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // Wideband SB-CELP carries a full NB sub-decoder state plus the
+        // high-band QMF analysis/synthesis memory and the high-band LPC
+        // synthesis state. Rebuild a fresh `WbDecoder` so every carry-over
+        // filter memory is zeroed.
+        self.wb = WbDecoder::new();
+        self.pending = None;
+        self.eof = false;
         Ok(())
     }
 }
