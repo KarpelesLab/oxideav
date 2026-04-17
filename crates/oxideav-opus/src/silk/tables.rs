@@ -178,3 +178,40 @@ pub const SHELL_4WAY_SPLIT_ICDF: [[u8; 16]; 4] = [
 // Keep the helper used in lsf.rs in sync: 11-symbol uniform ICDF.
 pub const NLSF_RESIDUAL_UNIFORM_11_ICDF: [u8; 11] =
     [232, 208, 184, 160, 136, 112, 88, 64, 40, 20, 0];
+
+// -------------------------------------------------------------------
+// §4.2.7.1 Stereo prediction weights and mid-only flag
+// (verbatim from libopus silk/tables_other.c).
+// -------------------------------------------------------------------
+
+/// Joint iCDF for the 5×5 grid of stereo prediction weight coarse indices
+/// (`ix[0][2]`, `ix[1][2]`).
+pub const STEREO_PRED_JOINT_ICDF: [u8; 25] = [
+    249, 247, 246, 245, 244, 234, 210, 202, 201, 200, 197, 174, 82, 59, 56, 55, 54, 46, 22, 12, 11,
+    10, 9, 7, 0,
+];
+
+/// Uniform iCDF for the 3-value component (`ix[n][0]`).
+pub const STEREO_UNIFORM3_ICDF: [u8; 3] = [171, 85, 0];
+
+/// Uniform iCDF for the 5-value sub-step component (`ix[n][1]`).
+pub const STEREO_UNIFORM5_ICDF: [u8; 5] = [205, 154, 102, 51, 0];
+
+/// Flag picking "only mid channel is coded" (2-symbol, ~50:50).
+pub const STEREO_ONLY_CODE_MID_ICDF: [u8; 2] = [64, 0];
+
+/// Stereo predictor quantization table (Q13), 16 entries. Consulted with
+/// `idx = ix[0] + 3*ix[2]` ∈ [0, 15] and `idx+1` for interpolation.
+pub const STEREO_PRED_QUANT_Q13: [i16; 16] = [
+    -13732, -10050, -8266, -7526, -6500, -5000, -2950, -820, 820, 2950, 5000, 6500, 7526, 8266,
+    10050, 13732,
+];
+
+// -------------------------------------------------------------------
+// §4.2.4 LBRR flag packing for multi-frame (40/60 ms) packets.
+// -------------------------------------------------------------------
+
+/// LBRR flags iCDF for a 40 ms packet (2 sub-frames, 3 symbols).
+pub const LBRR_FLAGS_2_ICDF: [u8; 3] = [203, 150, 0];
+/// LBRR flags iCDF for a 60 ms packet (3 sub-frames, 7 symbols).
+pub const LBRR_FLAGS_3_ICDF: [u8; 7] = [215, 195, 166, 125, 110, 82, 0];

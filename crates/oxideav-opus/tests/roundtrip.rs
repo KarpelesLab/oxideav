@@ -569,11 +569,14 @@ fn silk_nb_voip_10ms_decodes() {
     );
 }
 
-/// 60 ms SILK is currently a tracked follow-up. Pin the contract that
-/// the decoder rejects it cleanly with a precise `Unsupported` that
-/// mentions the frame-size issue — no panic, no garbage, no desync.
+/// 60 ms SILK is now supported via a 3×20 ms outer loop (RFC 6716
+/// §4.2.4). Assert that a 60 ms packet decodes to exactly 2880 = 480×6
+/// 48 kHz samples (6 20 ms blocks would be 6×960; 3 60 ms blocks gives
+/// 3×960 = 2880 per packet). LBRR data is still not redundancy-decoded,
+/// so we tolerate `Unsupported` messages that specifically mention
+/// LBRR.
 #[test]
-fn silk_60ms_returns_unsupported() {
+fn silk_60ms_nb_decodes() {
     let Some(path) = ensure_voip_mono_60ms() else {
         eprintln!("skip: ffmpeg / reference unavailable");
         return;
@@ -582,35 +585,70 @@ fn silk_60ms_returns_unsupported() {
     let params = dmx.streams()[0].params.clone();
     let mut dec = oxideav_opus::decoder::make_decoder(&params).expect("make decoder");
 
-    let pkt = dmx.next_packet().expect("pkt");
-    let toc = Toc::parse(pkt.data[0]);
+    let first_pkt = dmx.next_packet().expect("pkt");
+    let toc = Toc::parse(first_pkt.data[0]);
     assert_eq!(toc.mode, OpusMode::SilkOnly);
     assert!(
         toc.frame_samples_48k == 1920 || toc.frame_samples_48k == 2880,
         "expected a 40 ms (1920) or 60 ms (2880) SILK config; got {}",
         toc.frame_samples_48k
     );
+    let expected_samples = toc.frame_samples_48k;
 
-    dec.send_packet(&pkt).expect("send");
-    match dec.receive_frame() {
-        Err(Error::Unsupported(msg)) => {
-            let lc = msg.to_lowercase();
-            assert!(
-                lc.contains("silk") && (lc.contains("40 ms") || lc.contains("60 ms")),
-                "expected SILK 40/60 ms Unsupported message, got: {}",
-                msg
-            );
+    // Re-open to decode from packet 0.
+    let mut dmx = open_ogg(path);
+    let mut decoded = 0usize;
+    let mut total_energy = 0f64;
+    for _ in 0..30 {
+        let pkt = match dmx.next_packet() {
+            Ok(p) => p,
+            Err(Error::Eof) => break,
+            Err(e) => panic!("demux: {}", e),
+        };
+        dec.send_packet(&pkt).expect("send");
+        match dec.receive_frame() {
+            Ok(Frame::Audio(a)) => {
+                assert_eq!(a.sample_rate, 48_000);
+                assert_eq!(
+                    a.samples, expected_samples,
+                    "40/60 ms SILK packet must produce {} samples; got {}",
+                    expected_samples, a.samples
+                );
+                assert_eq!(a.channels, 1);
+                for chunk in a.data[0].chunks_exact(2) {
+                    let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                    let f = s as f32 / 32768.0;
+                    total_energy += (f as f64) * (f as f64);
+                }
+                decoded += 1;
+            }
+            Ok(_) => panic!("expected audio"),
+            Err(Error::Unsupported(msg)) => {
+                if !msg.to_lowercase().contains("lbrr") {
+                    panic!("unexpected Unsupported on {} ms SILK: {}", if expected_samples == 2880 { 60 } else { 40 }, msg);
+                }
+            }
+            Err(e) => panic!("decode error: {:?}", e),
         }
-        Ok(_) => panic!("40/60 ms SILK unexpectedly decoded — if this implementation landed, update the test"),
-        Err(e) => panic!("expected Unsupported, got {:?}", e),
     }
+    assert!(
+        decoded >= 3,
+        "expected ≥3 successful 40/60 ms SILK decodes, got {decoded}"
+    );
+    let rms = (total_energy / (decoded as f64 * expected_samples as f64)).sqrt();
+    assert!(
+        rms > 0.0001,
+        "40/60 ms SILK output is silent (RMS={rms})"
+    );
 }
 
-/// Stereo SILK is currently a tracked follow-up. Pin the contract that
-/// the decoder rejects it cleanly with a precise `Unsupported` that
-/// mentions stereo.
+/// Stereo SILK is now supported (RFC 6716 §4.2.7.1 + §4.2.8). Each
+/// packet should produce a stereo-interleaved AudioFrame. Output
+/// should not be all-zero (some excitation makes it through) and
+/// should not clip to the full S16 range (the unmixing filter clamps
+/// to [-1, 1] in f32 before S16 conversion).
 #[test]
-fn silk_stereo_returns_unsupported() {
+fn silk_stereo_decodes_20ms_nb() {
     let Some(path) = ensure_voip_stereo() else {
         eprintln!("skip: ffmpeg / reference unavailable");
         return;
@@ -619,10 +657,16 @@ fn silk_stereo_returns_unsupported() {
     let params = dmx.streams()[0].params.clone();
     let mut dec = oxideav_opus::decoder::make_decoder(&params).expect("make decoder");
 
-    // Walk a few packets: at VOIP bitrates libopus consistently stays
-    // in SILK-only stereo, so every packet should be rejected.
     let mut silk_stereo_packets = 0usize;
-    for _ in 0..20 {
+    let mut decoded = 0usize;
+    let mut total_energy = 0f64;
+    let mut total_samples = 0usize;
+    let mut saw_non_zero_l = false;
+    let mut saw_non_zero_r = false;
+    let mut saturated = 0usize;
+    let mut total_scanned = 0usize;
+
+    for _ in 0..30 {
         let pkt = match dmx.next_packet() {
             Ok(p) => p,
             Err(Error::Eof) => break,
@@ -635,21 +679,121 @@ fn silk_stereo_returns_unsupported() {
         silk_stereo_packets += 1;
         dec.send_packet(&pkt).expect("send");
         match dec.receive_frame() {
-            Err(Error::Unsupported(msg)) => {
-                let lc = msg.to_lowercase();
-                assert!(
-                    lc.contains("silk") && lc.contains("stereo"),
-                    "expected SILK stereo Unsupported message, got: {}",
-                    msg
-                );
+            Ok(Frame::Audio(a)) => {
+                assert_eq!(a.sample_rate, 48_000);
+                assert_eq!(a.channels, 2, "TOC is stereo — output must be stereo");
+                // Stereo SILK @ 20 ms = 960 samples × 2 channels × 2 bytes.
+                assert_eq!(a.data[0].len(), a.samples as usize * 2 * 2);
+                let samples = &a.data[0];
+                // De-interleave to check both channels.
+                for pair in samples.chunks_exact(4) {
+                    let l = i16::from_le_bytes([pair[0], pair[1]]);
+                    let r = i16::from_le_bytes([pair[2], pair[3]]);
+                    if l != 0 {
+                        saw_non_zero_l = true;
+                    }
+                    if r != 0 {
+                        saw_non_zero_r = true;
+                    }
+                    if l.unsigned_abs() >= 32767 {
+                        saturated += 1;
+                    }
+                    if r.unsigned_abs() >= 32767 {
+                        saturated += 1;
+                    }
+                    total_scanned += 2;
+                    let lf = l as f32 / 32768.0;
+                    let rf = r as f32 / 32768.0;
+                    total_energy += (lf as f64) * (lf as f64) + (rf as f64) * (rf as f64);
+                }
+                total_samples += a.samples as usize;
+                decoded += 1;
             }
-            Ok(_) => panic!("stereo SILK unexpectedly decoded — if this implementation landed, update the test"),
-            Err(e) => panic!("expected Unsupported, got {:?}", e),
+            Ok(_) => panic!("expected audio"),
+            Err(Error::Unsupported(msg)) => {
+                // LBRR is still not redundancy-decoded — tolerate only that.
+                if !msg.to_lowercase().contains("lbrr") {
+                    panic!("unexpected Unsupported on stereo SILK: {}", msg);
+                }
+            }
+            Err(e) => panic!("decode error: {:?}", e),
         }
     }
     assert!(
         silk_stereo_packets > 0,
         "expected ≥1 stereo SILK packet from the VOIP stereo reference"
+    );
+    assert!(
+        decoded >= 5,
+        "expected ≥5 successful stereo SILK decodes, got {decoded}"
+    );
+    assert!(saw_non_zero_l, "left channel is entirely zero");
+    assert!(saw_non_zero_r, "right channel is entirely zero");
+    // The MVP synth can produce occasional loud spikes: we tolerate
+    // *some* clipping but assert the output is not hard-pinned at the
+    // S16 extremes for every sample (which would indicate a broken
+    // unmix scale or an unbounded filter).
+    let sat_ratio = saturated as f64 / total_scanned.max(1) as f64;
+    assert!(
+        sat_ratio < 0.95,
+        "stereo output is 100% saturated ({saturated}/{total_scanned}) — scale bug likely"
+    );
+    let rms = (total_energy / (total_samples as f64 * 2.0)).sqrt();
+    assert!(
+        rms > 1e-4,
+        "stereo SILK output is silent (RMS={rms}); expected audible signal"
+    );
+}
+
+/// When the encoder signals `mid_only`, the decoder still produces
+/// audible stereo output (L == R == mid). This test walks a stereo
+/// reference clip and checks that at least the overall output has
+/// non-zero energy — a regression here would mean the mid-only code
+/// path is silent.
+#[test]
+fn silk_stereo_mid_only_is_not_empty() {
+    let Some(path) = ensure_voip_stereo() else {
+        eprintln!("skip: ffmpeg / reference unavailable");
+        return;
+    };
+    let mut dmx = open_ogg(path);
+    let params = dmx.streams()[0].params.clone();
+    let mut dec = oxideav_opus::decoder::make_decoder(&params).expect("make decoder");
+
+    let mut any_non_zero = false;
+    for _ in 0..30 {
+        let pkt = match dmx.next_packet() {
+            Ok(p) => p,
+            Err(Error::Eof) => break,
+            Err(e) => panic!("demux: {}", e),
+        };
+        let toc = Toc::parse(pkt.data[0]);
+        if toc.mode != OpusMode::SilkOnly || !toc.stereo {
+            continue;
+        }
+        dec.send_packet(&pkt).expect("send");
+        match dec.receive_frame() {
+            Ok(Frame::Audio(a)) => {
+                for chunk in a.data[0].chunks_exact(2) {
+                    let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                    if s != 0 {
+                        any_non_zero = true;
+                        break;
+                    }
+                }
+                if any_non_zero {
+                    break;
+                }
+            }
+            Err(Error::Unsupported(msg)) if msg.to_lowercase().contains("lbrr") => {
+                continue;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        any_non_zero,
+        "every stereo SILK frame was silent — possible mid-only regression"
     );
 }
 

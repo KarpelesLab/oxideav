@@ -1,5 +1,4 @@
-//! Opus decoder — wraps the CELT pipeline and falls back to silence/Unsupported
-//! for SILK / Hybrid / multistream.
+//! Opus decoder — wraps the CELT pipeline and the SILK sub-decoder.
 //!
 //! What's handled end-to-end (RFC 6716):
 //!
@@ -12,7 +11,11 @@
 //!    coarse + fine band energy, bit allocation, PVQ shape, anti-collapse,
 //!    denormalise, IMDCT (sub-block + window + overlap-add), comb post
 //!    filter. Output is 48 kHz S16 PCM.
-//! 5. **SILK-only / Hybrid / multistream** — clean `Unsupported` errors.
+//! 5. **SILK-only frames (§4.2)** — NB/MB/WB mono + stereo at 10/20/40/60 ms
+//!    via the `silk` module. LBRR redundancy data is parsed but not yet
+//!    decoded — packets with LBRR flags set return Unsupported. See
+//!    `silk/mod.rs` for details.
+//! 6. **Hybrid / multistream** — clean `Unsupported` errors.
 
 use oxideav_celt::bands::{anti_collapse, denormalise_bands, quant_all_bands};
 use oxideav_celt::header::decode_header;
@@ -215,8 +218,10 @@ fn decode_frame(
 /// Decode a SILK-only frame using the crate-local `silk` module and
 /// upsample to 48 kHz.
 ///
-/// Supported: mono NB/MB/WB at 10 ms or 20 ms. Everything else returns
-/// `Unsupported` with a precise message (see `SilkDecoder::decode_frame_to_48k`).
+/// Supported: mono and stereo NB/MB/WB at 10/20/40/60 ms. LBRR
+/// redundancy data is not yet honoured — packets with LBRR flags set
+/// return `Unsupported` (the most recent reference clips from ffmpeg
+/// at VOIP bitrates don't enable LBRR).
 fn decode_silk_frame(
     dec: &mut OpusDecoder,
     toc: &Toc,
@@ -234,17 +239,41 @@ fn decode_silk_frame(
 
     let mut rc = RangeDecoder::new(bytes);
     let pcm = silk.decode_frame_to_48k(&mut rc, toc)?;
-    debug_assert!(
-        pcm.len() == n_samples,
-        "SILK expected {} samples, got {}",
-        n_samples,
-        pcm.len()
-    );
-    let mut out = vec![pcm.clone()];
-    while out.len() < channels {
-        out.push(pcm.clone());
+
+    if toc.stereo {
+        // `pcm` is interleaved L/R; split it into per-channel buffers.
+        debug_assert!(
+            pcm.len() == n_samples * 2,
+            "SILK stereo expected {} interleaved samples, got {}",
+            n_samples * 2,
+            pcm.len()
+        );
+        let mut left = Vec::with_capacity(n_samples);
+        let mut right = Vec::with_capacity(n_samples);
+        for chunk in pcm.chunks_exact(2) {
+            left.push(chunk[0]);
+            right.push(chunk[1]);
+        }
+        let mut out = vec![left, right];
+        // If the output container wants more channels (shouldn't happen
+        // for stereo Opus but guard anyway), splat the right channel.
+        while out.len() < channels {
+            out.push(out.last().cloned().unwrap_or_default());
+        }
+        Ok(out)
+    } else {
+        debug_assert!(
+            pcm.len() == n_samples,
+            "SILK expected {} samples, got {}",
+            n_samples,
+            pcm.len()
+        );
+        let mut out = vec![pcm.clone()];
+        while out.len() < channels {
+            out.push(pcm.clone());
+        }
+        Ok(out)
     }
-    Ok(out)
 }
 
 fn decode_celt_frame(
