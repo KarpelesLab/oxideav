@@ -1,9 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/oxideav-core",
-    "crates/oxideav-codec",
-    "crates/oxideav-container",
     "crates/oxideav-pipeline",
     "crates/oxideav-basic",
     "crates/oxideav-ogg",
@@ -22,7 +19,6 @@ members = [
     "crates/oxideav-h263",
     "crates/oxideav-vp8",
     "crates/oxideav-audio-filter",
-    "crates/oxideav-pixfmt",
     "crates/oxideav-mpeg4video",
     "crates/oxideav-theora",
     "crates/oxideav-iff",
@@ -68,9 +64,9 @@ authors = ["Mark Karpeles"]
 readme = "README.md"
 
 [workspace.dependencies]
-oxideav-core = { path = "crates/oxideav-core", version = "0.0.3" }
-oxideav-codec = { path = "crates/oxideav-codec", version = "0.0.4" }
-oxideav-container = { path = "crates/oxideav-container", version = "0.0.3" }
+oxideav-core = "0.0"
+oxideav-codec = "0.0"
+oxideav-container = "0.0"
 oxideav-pipeline = { path = "crates/oxideav-pipeline", version = "0.0.3" }
 oxideav-basic = { path = "crates/oxideav-basic", version = "0.0.3" }
 oxideav-ogg = { path = "crates/oxideav-ogg", version = "0.0.3" }
@@ -90,7 +86,7 @@ oxideav-av1 = { path = "crates/oxideav-av1", version = "0.0.3" }
 oxideav-h263 = { path = "crates/oxideav-h263", version = "0.0.3" }
 oxideav-vp8 = { path = "crates/oxideav-vp8", version = "0.0.3" }
 oxideav-audio-filter = { path = "crates/oxideav-audio-filter", version = "0.0.3" }
-oxideav-pixfmt = { path = "crates/oxideav-pixfmt", version = "0.0.3" }
+oxideav-pixfmt = "0.0"
 oxideav-mpeg4video = { path = "crates/oxideav-mpeg4video", version = "0.0.3" }
 oxideav-theora = { path = "crates/oxideav-theora", version = "0.0.3" }
 oxideav-iff = { path = "crates/oxideav-iff", version = "0.0.3" }
