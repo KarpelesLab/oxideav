@@ -173,7 +173,7 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 |-------|--------|--------|
 | **MJPEG** | ✅ baseline + progressive 4:2:0/4:2:2/4:4:4/grey | ✅ baseline |
 | **FFV1** | ✅ v3, 4:2:0/4:4:4 | ✅ v3 |
-| **MPEG-1 video** | ✅ I+P+B frames | ✅ I+P frames (half-pel ME, 42 dB PSNR) |
+| **MPEG-1 video** | ✅ I+P+B frames | ✅ I+P+B frames (half-pel ME, FWD/BWD/BI B-modes, 43 dB PSNR) |
 | **MPEG-4 Part 2** | ✅ I+P-VOP, half-pel MC | ✅ I+P-VOP (41-43 dB PSNR, 21% vs all-I) |
 | **Theora** | ✅ I+P frames | ✅ I+P frames (45 dB PSNR, 3.7× vs all-I) |
 | **H.263** | ✅ I+P pictures, half-pel MC | ✅ I+P pictures, diamond-pattern motion search (±15 pel range), 46 dB PSNR on sliding-gradient |
