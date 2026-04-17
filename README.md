@@ -171,7 +171,7 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 
 | Codec | Decode | Encode |
 |-------|--------|--------|
-| **MJPEG** | ✅ baseline 4:2:0/4:2:2/4:4:4/grey | ✅ baseline |
+| **MJPEG** | ✅ baseline + progressive 4:2:0/4:2:2/4:4:4/grey | ✅ baseline |
 | **FFV1** | ✅ v3, 4:2:0/4:4:4 | ✅ v3 |
 | **MPEG-1 video** | ✅ I+P+B frames | ✅ I+P frames (half-pel ME, 42 dB PSNR) |
 | **MPEG-4 Part 2** | ✅ I+P-VOP, half-pel MC | ✅ I+P-VOP (41-43 dB PSNR, 21% vs all-I) |
