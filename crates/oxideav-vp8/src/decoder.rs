@@ -161,6 +161,20 @@ impl Decoder for Vp8Decoder {
     fn flush(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // VP8 carries per-stream entropy probability tables
+        // (`PersistentProbs`) plus the three reference frames
+        // (LAST / GOLDEN / ALTREF) between packets. All of these must be
+        // dropped: probabilities restart at spec defaults on the next
+        // keyframe, and a post-seek inter-frame is an error anyway (the
+        // reference pictures it names aren't ours). Resetting to a fresh
+        // `DecoderState` takes care of both.
+        self.state = DecoderState::new();
+        self.queued.clear();
+        self.pending_pts = None;
+        Ok(())
+    }
 }
 
 /// Decode a single VP8 keyframe (or a P-frame if the caller has the correct

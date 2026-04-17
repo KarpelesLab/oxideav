@@ -177,4 +177,16 @@ impl Decoder for HevcDecoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Scaffold decoder — pixel reconstruction is unsupported, so the
+        // only state that could stale is the last parsed slice header and
+        // any transient pending markers. VPS/SPS/PPS tables + the
+        // `length_size` from hvcC are stream-level and must survive the
+        // reset or the decoder would reject subsequent slices.
+        self.last_slice = None;
+        self.pending.clear();
+        self.eof = false;
+        Ok(())
+    }
 }

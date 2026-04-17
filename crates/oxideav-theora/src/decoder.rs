@@ -458,6 +458,21 @@ impl Decoder for TheoraDecoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Theora inter frames reference `prev_ref` (the previous decoded
+        // frame) and `golden_ref` (the most recent keyframe) for motion
+        // compensation. Both must be dropped: a post-seek inter-frame
+        // whose MVs point at them would paste pre-seek pixels. Ready
+        // frames + pending PTS go too. `headers` (ident + setup) is
+        // stream-level config and is preserved.
+        self.ready_frames.clear();
+        self.pending_pts = None;
+        self.eof = false;
+        self.prev_ref = None;
+        self.golden_ref = None;
+        Ok(())
+    }
 }
 
 /// Crop three full-frame planes (top-down) to the picture region.

@@ -325,6 +325,18 @@ impl Decoder for H263Decoder {
         }
     }
 
+    fn reset(&mut self) -> Result<()> {
+        // H.263 is self-contained per packet bar the motion-compensation
+        // reference. Drop the NAL buffer, ready queue, and the last
+        // decoded picture used as MV reference for the next P-picture.
+        self.buffer.clear();
+        self.ready_frames.clear();
+        self.pending_pts = None;
+        self.eof = false;
+        self.reference = None;
+        Ok(())
+    }
+
     fn flush(&mut self) -> Result<()> {
         self.eof = true;
         self.process()

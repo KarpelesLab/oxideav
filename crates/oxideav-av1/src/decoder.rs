@@ -157,4 +157,17 @@ impl Decoder for Av1Decoder {
     fn flush(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Scaffold — parses headers but never produces pixels, so the
+        // only cross-packet state worth wiping is the cached last frame
+        // header and the last ingest error. The sequence header is
+        // stream-level config (mirrors what's in av1C extradata) and is
+        // preserved so post-seek frame headers can still be parsed
+        // without waiting for another sequence OBU.
+        self.last_frame_header = None;
+        self.last_error = None;
+        self.seen_frame = false;
+        Ok(())
+    }
 }

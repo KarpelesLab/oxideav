@@ -126,6 +126,20 @@ impl Decoder for Vp9Decoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Scaffold decoder — only header-level state is retained. Drop
+        // the last parsed header and remembered color_config (the latter
+        // is used by non-key frames to infer subsampling / bit depth, so
+        // if we kept it an inter-frame before the next key would be
+        // decoded with stale colour metadata). Ready queue + eof flag
+        // are always transient.
+        self.last_color_config = None;
+        self.last_header = None;
+        self.ready_frames.clear();
+        self.eof = false;
+        Ok(())
+    }
 }
 
 /// Helper that returns frame_rate from container-supplied stream timing

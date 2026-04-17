@@ -304,6 +304,21 @@ impl Decoder for H264Decoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Drop the in-flight picture, pending slice-header cache, and
+        // ready frame queue. SPS/PPS tables + AVCC config (length_size,
+        // last_avc_config) are stream-level — they come from extradata or
+        // out-of-band SPS/PPS NALs that won't be retransmitted post-seek,
+        // so they stay put. Note: current decoder only implements I
+        // slices, so there's no DPB / reference-picture list to wipe.
+        self.pending_pts = None;
+        self.ready_frames.clear();
+        self.eof = false;
+        self.last_slice_headers.clear();
+        self.current_pic = None;
+        Ok(())
+    }
 }
 
 /// Build a `CodecParameters` from a parsed SPS — useful when wiring a

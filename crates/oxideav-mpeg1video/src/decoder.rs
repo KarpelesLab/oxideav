@@ -266,6 +266,27 @@ impl Decoder for Mpeg1VideoDecoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Wipe all decode state that must not survive a seek:
+        //   * the NAL-accumulator buffer,
+        //   * GOP header + anchor PTS + highest temporal_reference,
+        //   * the reference-picture manager (forward+backward I/P anchors),
+        //   * the ready_frames queue.
+        // `seq_header` is stream-level config — if the container has one
+        // it won't resend it after a seek, and it may still be needed to
+        // decode subsequent pictures. Frame duration is derived from the
+        // sequence header so it stays too.
+        self.buffer.clear();
+        self.gop_header = None;
+        self.gop_anchor_pts = None;
+        self.gop_max_tr = 0;
+        self.refs = ReferenceManager::new();
+        self.ready_frames.clear();
+        self.pending_pts = None;
+        self.eof = false;
+        Ok(())
+    }
 }
 
 /// Locate the end position of the next picture in `buf`.

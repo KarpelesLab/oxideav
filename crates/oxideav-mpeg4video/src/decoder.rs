@@ -354,6 +354,20 @@ impl Decoder for Mpeg4VideoDecoder {
         self.eof = true;
         Ok(())
     }
+
+    fn reset(&mut self) -> Result<()> {
+        // Drop the NAL-accumulator buffer, the ready-frame queue, and the
+        // stored reference picture (used as `prev_ref` for the next P-VOP).
+        // VOS / VO / VOL are stream-level config extracted once from the
+        // bitstream — kept so we can decode subsequent VOPs without
+        // waiting for the headers to reappear.
+        self.buffer.clear();
+        self.ready_frames.clear();
+        self.pending_pts = None;
+        self.eof = false;
+        self.prev_ref = None;
+        Ok(())
+    }
 }
 
 /// Build a `CodecParameters` from a VOL.
