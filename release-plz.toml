@@ -1,0 +1,29 @@
+# release-plz config — https://release-plz.dev/docs/config
+#
+# The workspace uses `version.workspace = true` in every member crate, so
+# all crates move in lock-step from a single version string in the root
+# Cargo.toml. release-plz understands this and bumps them together.
+
+[workspace]
+# Generate conventional-commits changelog entries in a single workspace
+# CHANGELOG.md rather than 58 per-crate files.
+changelog_path = "./CHANGELOG.md"
+
+# Fail the release if the working tree is dirty.
+allow_dirty = false
+
+# Crates.io rate-limits new-crate publishes aggressively; give the run
+# plenty of time to get through all 58 members.
+publish_timeout = "30m"
+
+# A single workspace tag + GitHub Release (vX.Y.Z), not one per crate.
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+
+# Per-crate overrides.
+
+# Test harness — never publish, never tag.
+[[package]]
+name = "oxideav-tests"
+publish = false
+release = false

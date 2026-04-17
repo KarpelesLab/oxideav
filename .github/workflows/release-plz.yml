@@ -1,0 +1,70 @@
+name: Release-plz
+
+# release-plz drives two things:
+#   1. release-plz-pr: opens/updates a single "chore(release): ..." PR
+#      that bumps [workspace.package].version and regenerates CHANGELOG.md
+#      from conventional commits. Runs on every push to master.
+#   2. release-plz-release: when the release PR is merged, publishes every
+#      member crate to crates.io (skipping `publish = false`), then creates
+#      the git tag + GitHub Release.
+#
+# For the tag push created here to trigger .github/workflows/release.yml
+# (cross-platform binary builds), you must set the RELEASE_PLZ_TOKEN secret
+# to a PAT with `repo` + `workflow` scope. A push authenticated with the
+# default GITHUB_TOKEN will NOT trigger downstream workflows — that's a
+# GitHub Actions safety rule, not a release-plz limitation. Without the
+# PAT, you can trigger release.yml manually via the Actions tab.
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-plz-pr:
+    name: release-plz PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz (open/refresh release PR)
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-plz-release:
+    name: release-plz release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz (publish + tag + GH release)
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
