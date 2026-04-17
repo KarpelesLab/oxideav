@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust MPEG-1 Audio Layer I (MP1) decoder and encoder"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "mpeg", "mp1", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

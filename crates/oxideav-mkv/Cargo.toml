@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust Matroska (MKV/WebM) container for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "mkv", "matroska", "webm", "pure-rust"]
+categories = ["multimedia::video", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

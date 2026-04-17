@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust Ogg container (pages, packets, CRC32) for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "ogg", "container", "demuxer", "pure-rust"]
+categories = ["multimedia::encoding", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

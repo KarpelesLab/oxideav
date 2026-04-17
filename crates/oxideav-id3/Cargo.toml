@@ -8,5 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust ID3v1 / ID3v2 (2.2 / 2.3 / 2.4) tag parser for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "id3", "mp3", "metadata"]
+categories = ["multimedia::audio", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }

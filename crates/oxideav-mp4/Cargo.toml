@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust MP4 / ISO base media file container for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "mp4", "iso-bmff", "container", "pure-rust"]
+categories = ["multimedia::video", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Opus audio codec for oxideav (header parsing + decoder stub)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "opus", "codec", "pure-rust"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

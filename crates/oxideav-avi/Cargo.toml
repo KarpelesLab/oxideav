@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust AVI (RIFF) container for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "avi", "riff", "container", "pure-rust"]
+categories = ["multimedia::video", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-container = { workspace = true }

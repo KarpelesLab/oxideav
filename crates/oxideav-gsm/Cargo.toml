@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust GSM Full Rate (ETSI 06.10, RPE-LTP) speech codec"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "gsm", "telephony", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

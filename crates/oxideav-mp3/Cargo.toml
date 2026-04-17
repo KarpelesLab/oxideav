@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust MPEG-1/2 Audio Layer III (MP3) decoder + minimum-viable CBR encoder"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "mp3", "mpeg", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

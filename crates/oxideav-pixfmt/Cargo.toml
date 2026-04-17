@@ -8,5 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust pixel-format conversions, palette quantisation, and dithering for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "video", "pixel-format", "color", "yuv"]
+categories = ["multimedia::video", "multimedia::images"]
+
 [dependencies]
 oxideav-core = { workspace = true }

@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Central aggregator crate for oxideav — re-exports and a prebuilt registry"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "video", "codec", "transcoding"]
+categories = ["multimedia", "multimedia::encoding"]
+
 [features]
 default = [
     "basic",

@@ -8,5 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Container (demuxer/muxer) traits and registry for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "container", "demuxer", "muxer", "pure-rust"]
+categories = ["multimedia::encoding", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }

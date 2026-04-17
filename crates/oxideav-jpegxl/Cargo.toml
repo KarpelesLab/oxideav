@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust JPEG XL (JXL) codec — scaffold (decoder + encoder not yet implemented)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "image", "jpegxl", "jxl", "codec"]
+categories = ["multimedia::encoding", "multimedia::images"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

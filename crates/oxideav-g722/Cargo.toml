@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust ITU-T G.722 (64 kbit/s) wideband sub-band ADPCM codec"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "g722", "telephony", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust H.264 / AVC (ITU-T H.264 | ISO/IEC 14496-10) decoder for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "video", "h264", "avc", "codec"]
+categories = ["multimedia::encoding", "multimedia::video"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

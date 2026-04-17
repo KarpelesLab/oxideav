@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust FLAC: native container + codec id (decoder forthcoming)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "flac", "lossless", "pure-rust"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

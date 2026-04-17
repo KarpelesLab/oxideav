@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust AAC (AAC-LC) codec scaffold for oxideav — ADTS parser, AudioSpecificConfig, Huffman tables, decoder stub"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "aac", "codec", "pure-rust"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

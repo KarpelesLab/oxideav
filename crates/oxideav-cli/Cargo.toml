@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Command-line frontend for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "transcoding", "cli", "ffmpeg", "pure-rust"]
+categories = ["multimedia", "command-line-utilities"]
+
 [[bin]]
 name = "oxideav"
 path = "src/main.rs"

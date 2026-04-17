@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust bitmap-subtitle decoders: PGS (.sup Blu-ray), DVB subtitles, VobSub (.idx/.sub)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "subtitle", "image", "dvdsub", "pgs"]
+categories = ["multimedia", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

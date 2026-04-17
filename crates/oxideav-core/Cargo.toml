@@ -8,5 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Core types for oxideav: timestamps, packets, frames, media formats"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "video", "codec", "pure-rust"]
+categories = ["multimedia", "encoding"]
+
 [dependencies]
 thiserror = { workspace = true }

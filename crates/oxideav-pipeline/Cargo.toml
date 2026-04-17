@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pipeline composition for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "pipeline", "transcoding", "streaming", "pure-rust"]
+categories = ["multimedia"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust ITU-T G.728 Low-Delay CELP (LD-CELP, 16 kbit/s) decoder — scaffold"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "g728", "telephony", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

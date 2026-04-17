@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Simple standard codecs and containers for oxideav (PCM, WAV, ...)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "wav", "pcm", "pure-rust"]
+categories = ["multimedia::encoding"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

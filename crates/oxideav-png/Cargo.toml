@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust PNG + APNG decoder and encoder for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "image", "png", "codec", "pure-rust"]
+categories = ["multimedia::encoding", "multimedia::images"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

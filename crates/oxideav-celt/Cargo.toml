@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust CELT (MDCT path of Opus, RFC 6716) — range decoder + scaffold"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "celt", "opus", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

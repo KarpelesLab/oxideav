@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust WebP image decoder for oxideav (RIFF VP8 lossy + VP8L lossless + VP8X extended + ALPH + animation)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "image", "webp", "codec", "pure-rust"]
+categories = ["multimedia::encoding", "multimedia::images"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

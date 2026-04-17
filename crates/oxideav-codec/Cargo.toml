@@ -8,5 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Codec traits and registry for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "codec", "decoder", "encoder", "pure-rust"]
+categories = ["multimedia::encoding"]
+
 [dependencies]
 oxideav-core = { workspace = true }

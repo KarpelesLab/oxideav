@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust ITU-T G.723.1 dual-rate (6.3/5.3 kbit/s) speech decoder"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "g723", "telephony", "codec"]
+categories = ["multimedia::encoding", "multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

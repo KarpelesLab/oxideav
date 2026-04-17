@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Amiga ProTracker / SoundTracker module (MOD) codec for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "tracker", "amiga", "mod"]
+categories = ["multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

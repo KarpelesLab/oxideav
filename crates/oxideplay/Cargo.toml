@@ -8,6 +8,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Reference media player for the oxideav framework (SDL2 + crossterm)"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "player", "audio", "video", "sdl2"]
+categories = ["multimedia", "command-line-utilities"]
 # oxideplay is the only binary in the workspace allowed non-pure deps. We
 # load SDL2 *at runtime* through `libloading` rather than linking against
 # rust-sdl2 / sdl2-sys at build time — this keeps SDL2 a soft dependency

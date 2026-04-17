@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust audio filters (volume, gate, echo, resample, spectrogram) for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "audio", "filter", "resample", "effects"]
+categories = ["multimedia::audio"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

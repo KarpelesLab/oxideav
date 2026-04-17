@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust FFV1 (RFC 9043) lossless intra-only video codec for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "video", "ffv1", "lossless", "codec"]
+categories = ["multimedia::encoding", "multimedia::video"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust EA IFF 85 container support (8SVX audio, ILBM, …) for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "iff", "riff", "container", "pure-rust"]
+categories = ["multimedia", "parser-implementations"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "JSON-based transcode job graph for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "transcoding", "pipeline", "job", "graph"]
+categories = ["multimedia"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }

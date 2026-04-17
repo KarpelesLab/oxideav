@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure-Rust H.265 / HEVC (ITU-T H.265 | ISO/IEC 23008-2) bitstream parser + decoder scaffold for oxideav"
 
+readme = "README.md"
+homepage.workspace = true
+keywords = ["multimedia", "video", "h265", "hevc", "codec"]
+categories = ["multimedia::encoding", "multimedia::video"]
+
 [dependencies]
 oxideav-core = { workspace = true }
 oxideav-codec = { workspace = true }
