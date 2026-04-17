@@ -17,20 +17,22 @@
 //!
 //! # Encoder
 //!
-//! The crate ships an **encoder for the 5.3 kbit/s ACELP rate only**. The
-//! 6.3 kbit/s MP-MLQ rate returns [`Error::Unsupported`] when the caller
-//! requests it via `CodecParameters::bit_rate = Some(6300)` — see
-//! [`encoder::make_encoder`] and the [`encoder`] module docstring for the
-//! full rationale. The ACELP encoder implements the full analysis pipeline
-//! (LPC → LSP → open-loop pitch → closed-loop pitch refinement → 4-pulse
-//! ACELP fixed-codebook search → joint gain quantisation → 158-bit
-//! packing) but uses *simplified, locally-consistent* VQ codebooks rather
-//! than the ITU-T Table 5 / Table 7 codebooks. Bitstreams produced here
-//! therefore round-trip cleanly through the crate's own reference decoder
-//! (see [`encoder::decode_acelp_local`]) but are **not** bit-compatible
-//! with external G.723.1 implementations. Once the full ITU-T codebooks
-//! are ported into the decoder, the encoder's VQ tables can be swapped in
-//! a single patch without touching the analysis pipeline.
+//! The crate ships an encoder covering **both** G.723.1 rates:
+//!
+//! - `bit_rate = Some(5300)` → 5.3 kbit/s ACELP (20-byte frames, 4 pulses).
+//! - `bit_rate = Some(6300)` or unset → 6.3 kbit/s MP-MLQ (24-byte frames,
+//!   6 pulses on odd subframes, 5 on even).
+//!
+//! Both rates share the same LPC → LSP → open-loop pitch → closed-loop
+//! gain pipeline, and differ only in the fixed-codebook search and the
+//! bit-packed frame layout. Both paths use *simplified, locally-consistent*
+//! VQ codebooks rather than the ITU-T Table 5 / Table 7 / Table 9
+//! codebooks. Bitstreams produced here round-trip cleanly through the
+//! crate's own reference decoders ([`encoder::decode_acelp_local`] and
+//! [`encoder::decode_mpmlq_local`]) but are **not** bit-compatible with
+//! external G.723.1 implementations. Once the full ITU-T codebooks are
+//! ported into the decoder, the encoder's VQ tables can be swapped in a
+//! single patch without touching the analysis pipeline.
 //!
 //! Reference: ITU-T G.723.1 Recommendation (May 2006) and Annex B.
 

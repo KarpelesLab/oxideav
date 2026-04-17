@@ -1,13 +1,18 @@
-//! ITU-T G.723.1 encoder — ACELP (5.3 kbit/s) path.
+//! ITU-T G.723.1 encoder — ACELP (5.3 kbit/s) and MP-MLQ (6.3 kbit/s) paths.
 //!
 //! # Scope
 //!
-//! This module implements the **5.3 kbit/s ACELP** rate of G.723.1. The
-//! **6.3 kbit/s MP-MLQ** rate is intentionally not implemented: requesting
-//! it from [`make_encoder`] via the codec parameters' hint channel returns
-//! [`Error::Unsupported`]. See `lib.rs` for the rationale (MP-MLQ requires
-//! a full multipulse LPC codebook search with combined amplitude/position
-//! quantisation that would take another session to stabilise).
+//! This module implements **both** rates of G.723.1:
+//!
+//! - **5.3 kbit/s ACELP** — 4 fixed-position pulses per subframe on
+//!   4 tracks (T0..T3), 20-byte payload, discriminator `01`.
+//! - **6.3 kbit/s MP-MLQ** — 6 pulses on odd subframes (0, 2) and
+//!   5 pulses on even subframes (1, 3), 24-byte payload, discriminator `00`.
+//!
+//! [`make_encoder`] dispatches between the two rates based on the
+//! `CodecParameters.bit_rate` hint: `Some(6300)` or unset → MP-MLQ;
+//! `Some(5300)` → ACELP; any other value returns [`Error::Unsupported`].
+//! The default (no hint) is 6.3 kbit/s, the more common operating rate.
 //!
 //! # Pipeline
 //!
@@ -19,9 +24,12 @@
 //!          → 4× subframe loop:
 //!                - open-loop pitch from weighted residual
 //!                - closed-loop adaptive-codebook gain
-//!                - 4-pulse ACELP fixed codebook search on T0/T1/T2/T3 tracks
+//!                - rate-specific fixed-codebook search
+//!                    · ACELP:  4-pulse search on T0..T3 tracks
+//!                    · MP-MLQ: greedy 6/5-pulse search on the grid
 //!                - joint gain quantisation (12-bit combined index)
-//!          → bit-pack 158 bits into a 20-byte payload with discriminator 01
+//!          → bit-pack 158 bits (ACELP, 20 B, rate=01)
+//!               or 192 bits (MP-MLQ, 24 B, rate=00)
 //! ```
 //!
 //! ## Departures from the letter of the spec
@@ -30,22 +38,25 @@
 //!   codebook — NOT the ITU-T Table 5 codebook. A bitstream produced by this
 //!   encoder therefore cannot be decoded by an external (e.g. reference-C)
 //!   G.723.1 decoder for high-quality speech. It IS, however, internally
-//!   consistent with the [`decode_acelp_local`] helper provided here (used
-//!   by the tests for round-trip verification) and passes the framework's
-//!   scaffold decoder (which emits silence).
+//!   consistent with the [`decode_acelp_local`] / [`decode_mpmlq_local`]
+//!   helpers provided here (used by the tests for round-trip verification)
+//!   and passes the framework's scaffold decoder (which emits silence).
 //! - Open-loop pitch search is on the weighted short-term residual,
 //!   covering `[PITCH_MIN..=PITCH_MAX]` as the spec mandates; refinement
 //!   within ±1 is done by integer-lag re-correlation rather than the spec's
 //!   fractional-lag search.
+//! - MP-MLQ pulse search is a pure greedy per-pulse residual-minimiser on
+//!   an 8-slot track per pulse (3-bit position + 1-bit sign); a shared
+//!   subframe gain is quantised together with the ACB gain via the same
+//!   12-bit codeword as ACELP.
 //! - Gain quantisation packs a 3-bit ACB gain index + 9-bit FCB gain
 //!   exponent/mantissa into a 12-bit combined word — this fills the
 //!   GAIN field exactly but uses a locally-chosen mapping rather than the
 //!   spec's Table 7.
 //!
-//! These deliberate simplifications keep the encoder pure-Rust, ~700 LOC,
+//! These deliberate simplifications keep the encoder pure-Rust, ~1000 LOC,
 //! and bit-exact with its own reference decode, while still exercising the
-//! full analysis / packing pipeline (LPC → LSP → pitch → ACELP fixed-book →
-//! joint gain → bit-pack).
+//! full analysis / packing pipeline for both rates.
 
 use std::collections::VecDeque;
 
@@ -58,12 +69,22 @@ use oxideav_core::AudioFrame;
 
 use crate::bitreader::BitReader;
 use crate::tables::{
-    FRAME_SIZE_SAMPLES, LOW_RATE_BYTES, LPC_ORDER, PITCH_MAX, PITCH_MIN, SAMPLE_RATE_HZ,
-    SUBFRAMES_PER_FRAME, SUBFRAME_SIZE,
+    FRAME_SIZE_SAMPLES, HIGH_RATE_BYTES, LOW_RATE_BYTES, LPC_ORDER, PITCH_MAX, PITCH_MIN,
+    SAMPLE_RATE_HZ, SUBFRAMES_PER_FRAME, SUBFRAME_SIZE,
 };
 
 /// Total payload size for an ACELP (5.3 kbit/s) frame.
 const ACELP_PAYLOAD_BYTES: usize = LOW_RATE_BYTES;
+/// Total payload size for an MP-MLQ (6.3 kbit/s) frame.
+const MPMLQ_PAYLOAD_BYTES: usize = HIGH_RATE_BYTES;
+
+/// MP-MLQ: number of pulses per subframe (odd subframes = 0/2, even = 1/3).
+const MPMLQ_PULSES_ODD: usize = 6;
+const MPMLQ_PULSES_EVEN: usize = 5;
+
+/// MP-MLQ: per-pulse position bits (8 candidate slots per track) + sign.
+const MPMLQ_POS_BITS: u32 = 3;
+const MPMLQ_SIGN_BITS: u32 = 1;
 
 /// Bitstream field widths for a 5.3 kbit/s frame, in packing order.
 ///
@@ -112,9 +133,68 @@ const _: () = {
     assert!(t == 160, "ACELP payload must be exactly 160 bits");
 };
 
-/// Build a G.723.1 encoder. The returned encoder produces 5.3 kbit/s
-/// ACELP bitstreams. Requesting 6.3 kbit/s MP-MLQ via a bit-rate hint
-/// (`params.bit_rate = Some(6300)`) returns [`Error::Unsupported`].
+/// Bitstream field widths for a 6.3 kbit/s MP-MLQ frame, in packing order.
+///
+/// Packing layout chosen for internal consistency with `decode_mpmlq_local`,
+/// NOT the ITU-T Annex B Table B.1 layout (see module docstring for the
+/// "local vs spec" caveat). Totals 192 bits = 24 bytes exactly, with no
+/// tail padding:
+///
+/// ```text
+///   2 + (8+8+8) + (7+2+7+2) + 4×12 + 4×1 + (24+20+24+20) + 8 = 192
+/// ```
+///
+/// The trailing 8-bit RSVD field is filled with zero and ignored on decode.
+#[rustfmt::skip]
+const MPMLQ_FIELDS: &[Field] = &[
+    Field { name: "RATE",  bits: 2 },   // discriminator = 00
+    Field { name: "LSP0",  bits: 8 },
+    Field { name: "LSP1",  bits: 8 },
+    Field { name: "LSP2",  bits: 8 },
+    Field { name: "ACL0",  bits: 7 },
+    Field { name: "ACL1",  bits: 2 },
+    Field { name: "ACL2",  bits: 7 },
+    Field { name: "ACL3",  bits: 2 },
+    Field { name: "GAIN0", bits: 12 },
+    Field { name: "GAIN1", bits: 12 },
+    Field { name: "GAIN2", bits: 12 },
+    Field { name: "GAIN3", bits: 12 },
+    Field { name: "GRID0", bits: 1 },
+    Field { name: "GRID1", bits: 1 },
+    Field { name: "GRID2", bits: 1 },
+    Field { name: "GRID3", bits: 1 },
+    Field { name: "MP0",   bits: 24 },  // 6 pulses × (3 pos + 1 sign) = 24
+    Field { name: "MP1",   bits: 20 },  // 5 pulses × (3 pos + 1 sign) = 20
+    Field { name: "MP2",   bits: 24 },
+    Field { name: "MP3",   bits: 20 },
+    Field { name: "RSVD",  bits: 8 },   // zero padding → 24 bytes total
+];
+
+const _: () = {
+    let mut t = 0u32;
+    let mut i = 0;
+    while i < MPMLQ_FIELDS.len() {
+        t += MPMLQ_FIELDS[i].bits;
+        i += 1;
+    }
+    assert!(t == 192, "MP-MLQ payload must be exactly 192 bits");
+};
+
+/// Which rate/mode a given encoder instance is locked to.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum EncoderMode {
+    /// 5.3 kbit/s ACELP (20-byte packets, discriminator = `01`).
+    Acelp,
+    /// 6.3 kbit/s MP-MLQ (24-byte packets, discriminator = `00`).
+    MpMlq,
+}
+
+/// Build a G.723.1 encoder. The returned encoder's rate is picked from
+/// `params.bit_rate`:
+///
+/// - `None` or `Some(6300)` → 6.3 kbit/s MP-MLQ (the default).
+/// - `Some(5300)` → 5.3 kbit/s ACELP.
+/// - Any other bit rate → [`Error::Unsupported`].
 pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
     let sample_rate = params.sample_rate.unwrap_or(SAMPLE_RATE_HZ);
     if sample_rate != SAMPLE_RATE_HZ {
@@ -134,31 +214,33 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
             "G.723.1 encoder: input sample format {sample_format:?} not supported (need S16)"
         )));
     }
-    // 6.3 kbit/s (MP-MLQ) path is intentionally not implemented.
-    if let Some(rate) = params.bit_rate {
-        if rate > 5_600 {
-            return Err(Error::unsupported(
-                "G.723.1 encoder: 6.3 kbit/s MP-MLQ path not implemented \
-                 — this encoder supports 5.3 kbit/s ACELP only. \
-                 Set bit_rate to 5300 or leave it unset.",
-            ));
+    // Pick the rate from bit_rate (default = 6.3 kbit/s MP-MLQ).
+    let (mode, bit_rate) = match params.bit_rate {
+        None => (EncoderMode::MpMlq, 6_300u64),
+        Some(r) if (6_000..=6_500).contains(&r) => (EncoderMode::MpMlq, 6_300u64),
+        Some(r) if (5_000..=5_600).contains(&r) => (EncoderMode::Acelp, 5_300u64),
+        Some(r) => {
+            return Err(Error::unsupported(format!(
+                "G.723.1 encoder: bit_rate {r} not supported; valid values are 5300 (ACELP) and 6300 (MP-MLQ)"
+            )));
         }
-    }
+    };
 
     let mut output = params.clone();
     output.media_type = MediaType::Audio;
     output.sample_format = Some(SampleFormat::S16);
     output.channels = Some(1);
     output.sample_rate = Some(SAMPLE_RATE_HZ);
-    output.bit_rate = Some(5_300);
+    output.bit_rate = Some(bit_rate);
 
-    Ok(Box::new(G7231Encoder::new(output)))
+    Ok(Box::new(G7231Encoder::new(output, mode)))
 }
 
 /// Encoder state.
 pub(crate) struct G7231Encoder {
     output_params: CodecParameters,
     time_base: TimeBase,
+    mode: EncoderMode,
     analysis: AnalysisState,
     pcm_queue: Vec<i16>,
     pending: VecDeque<Packet>,
@@ -167,10 +249,11 @@ pub(crate) struct G7231Encoder {
 }
 
 impl G7231Encoder {
-    fn new(output_params: CodecParameters) -> Self {
+    fn new(output_params: CodecParameters, mode: EncoderMode) -> Self {
         Self {
             output_params,
             time_base: TimeBase::new(1, SAMPLE_RATE_HZ as i64),
+            mode,
             analysis: AnalysisState::new(),
             pcm_queue: Vec::new(),
             pending: VecDeque::new(),
@@ -255,8 +338,16 @@ impl G7231Encoder {
     fn emit_frame(&mut self, pcm: &[i16; FRAME_SIZE_SAMPLES]) {
         let frame_idx = self.frame_index;
         self.frame_index += 1;
-        let fields = self.analysis.analyse(pcm);
-        let packed = pack_acelp_frame(&fields);
+        let packed = match self.mode {
+            EncoderMode::Acelp => {
+                let fields = self.analysis.analyse_acelp(pcm);
+                pack_acelp_frame(&fields)
+            }
+            EncoderMode::MpMlq => {
+                let fields = self.analysis.analyse_mpmlq(pcm);
+                pack_mpmlq_frame(&fields)
+            }
+        };
         let mut pkt = Packet::new(0, self.time_base, packed);
         pkt.pts = Some(frame_idx as i64 * FRAME_SIZE_SAMPLES as i64);
         pkt.dts = pkt.pts;
@@ -309,7 +400,7 @@ impl AnalysisState {
         }
     }
 
-    fn analyse(&mut self, pcm: &[i16; FRAME_SIZE_SAMPLES]) -> FrameFields {
+    fn analyse_acelp(&mut self, pcm: &[i16; FRAME_SIZE_SAMPLES]) -> FrameFields {
         // ---- 1. Pre-process: s16 → f32 + HPF (simple 1st-order). ----
         let mut sig = [0.0f32; FRAME_SIZE_SAMPLES];
         let mut prev = self.preemph_prev;
@@ -431,6 +522,125 @@ impl AnalysisState {
             fcb,
         }
     }
+
+    /// Sister method of [`analyse_acelp`] producing an [`MpMlqFrameFields`]
+    /// for the 6.3 kbit/s MP-MLQ path. Shares the LPC / LSP / pitch / gain
+    /// machinery — only the fixed codebook search differs (6 or 5 pulses
+    /// per subframe rather than 4, greedy search rather than per-track).
+    fn analyse_mpmlq(&mut self, pcm: &[i16; FRAME_SIZE_SAMPLES]) -> MpMlqFrameFields {
+        // ---- 1. Pre-process: s16 → f32 + HPF. ----
+        let mut sig = [0.0f32; FRAME_SIZE_SAMPLES];
+        let mut prev = self.preemph_prev;
+        for i in 0..FRAME_SIZE_SAMPLES {
+            let x = pcm[i] as f32;
+            let y = x - 0.98 * prev;
+            prev = x;
+            sig[i] = y * (1.0 / 32_768.0);
+        }
+        self.preemph_prev = prev;
+
+        // ---- 2. LPC analysis on full frame. ----
+        let a = lpc_analysis(&sig);
+        let lsp_cur = lpc_to_lsp(&a);
+        let (lsp_idx, lsp_q) = quantise_lsp(&lsp_cur);
+
+        // ---- 3. Perceptually weighted signal. ----
+        let mut weighted = [0.0f32; FRAME_SIZE_SAMPLES];
+        weighted_signal(&a, &sig, &mut self.w_in_mem, &mut weighted);
+
+        // ---- 4. Subframe loop. ----
+        let mut acl = [0i32; SUBFRAMES_PER_FRAME];
+        let mut gain_idx = [0u32; SUBFRAMES_PER_FRAME];
+        let mut grid = [0u8; SUBFRAMES_PER_FRAME];
+        let mut mp = [MpMlqPulses::default(); SUBFRAMES_PER_FRAME];
+
+        let mut prev_lag: i32 = 60;
+        for s in 0..SUBFRAMES_PER_FRAME {
+            let lsp_interp = interpolate_lsp(s, &self.prev_lsp, &lsp_q);
+            let a_sub = lsp_to_lpc(&lsp_interp);
+            let a_weighted = bandwidth_expand(&a_sub, 0.9);
+
+            let start = s * SUBFRAME_SIZE;
+            let end = start + SUBFRAME_SIZE;
+            let target = &weighted[start..end];
+
+            // Open-loop pitch on weighted signal (same as ACELP).
+            let ol_lag = open_loop_pitch(target, &self.exc_history);
+
+            // Lag encoding: 7-bit absolute on sub 0/2, 2-bit delta on 1/3.
+            let lag_code = if s == 0 || s == 2 {
+                encode_abs_lag(ol_lag)
+            } else {
+                encode_delta_lag(ol_lag, prev_lag)
+            };
+            let decoded_lag = if s == 0 || s == 2 {
+                decode_abs_lag(lag_code)
+            } else {
+                decode_delta_lag(lag_code, prev_lag)
+            };
+            prev_lag = decoded_lag;
+            acl[s] = lag_code as i32;
+
+            // Adaptive codebook.
+            let mut adaptive = [0.0f32; SUBFRAME_SIZE];
+            copy_adaptive(&self.exc_history, decoded_lag, &mut adaptive);
+
+            let h = impulse_response(&a_weighted, SUBFRAME_SIZE);
+            let adapt_filtered = conv_causal(&adaptive, &h);
+            let g_adapt = lsq_gain(&adapt_filtered, target).clamp(0.0, 1.2);
+
+            // Residual target for MP-MLQ pulse search.
+            let mut target2 = [0.0f32; SUBFRAME_SIZE];
+            for n in 0..SUBFRAME_SIZE {
+                target2[n] = target[n] - g_adapt * adapt_filtered[n];
+            }
+
+            // MP-MLQ: 6 pulses on odd subframes (0, 2), 5 on even (1, 3).
+            let n_pulses = if s % 2 == 0 {
+                MPMLQ_PULSES_ODD
+            } else {
+                MPMLQ_PULSES_EVEN
+            };
+            let (positions, signs, grid_bit) = mpmlq_pulse_search(&target2, &h, n_pulses);
+            grid[s] = grid_bit;
+            mp[s] = MpMlqPulses {
+                positions,
+                signs,
+                n_pulses: n_pulses as u8,
+            };
+
+            // Reconstruct pulse signal for gain estimation.
+            let mut fcb_pulses = [0.0f32; SUBFRAME_SIZE];
+            mpmlq_place_pulses(&positions, &signs, n_pulses, grid_bit, &mut fcb_pulses);
+            let fcb_filtered = conv_causal(&fcb_pulses, &h);
+
+            let g_fixed = lsq_gain(&fcb_filtered, &target2).clamp(-32.0, 32.0);
+
+            let gi = quantise_gain(g_adapt, g_fixed);
+            gain_idx[s] = gi;
+
+            // Rebuild quantised excitation.
+            let (g_adapt_q, g_fixed_q) = dequantise_gain(gi);
+            let mut exc = [0.0f32; SUBFRAME_SIZE];
+            for n in 0..SUBFRAME_SIZE {
+                exc[n] = g_adapt_q * adaptive[n] + g_fixed_q * fcb_pulses[n];
+            }
+            self.exc_history.rotate_left(SUBFRAME_SIZE);
+            let tail = self.exc_history.len() - SUBFRAME_SIZE;
+            self.exc_history[tail..].copy_from_slice(&exc);
+            update_filter_mem(&a_sub, &exc, &mut self.syn_mem);
+        }
+
+        self.prev_lsp = lsp_q;
+
+        MpMlqFrameFields {
+            lsp_idx,
+            acl,
+            gain: gain_idx,
+            grid,
+            mp,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -440,6 +650,25 @@ struct FrameFields {
     gain: [u32; SUBFRAMES_PER_FRAME],
     grid: [u8; SUBFRAMES_PER_FRAME],
     fcb: [u32; SUBFRAMES_PER_FRAME],
+}
+
+/// MP-MLQ pulse layout for a single subframe. At most
+/// [`MPMLQ_PULSES_ODD`] pulses; `n_pulses` tells decoders how many slots
+/// are populated (5 on even subframes, 6 on odd subframes).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MpMlqPulses {
+    pub(crate) positions: [u32; MPMLQ_PULSES_ODD],
+    pub(crate) signs: [i32; MPMLQ_PULSES_ODD],
+    pub(crate) n_pulses: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MpMlqFrameFields {
+    lsp_idx: [u32; 3],
+    acl: [i32; SUBFRAMES_PER_FRAME],
+    gain: [u32; SUBFRAMES_PER_FRAME],
+    grid: [u8; SUBFRAMES_PER_FRAME],
+    mp: [MpMlqPulses; SUBFRAMES_PER_FRAME],
 }
 
 // ---------- LPC analysis ----------
@@ -997,6 +1226,136 @@ pub(crate) fn place_pulses(
     }
 }
 
+// ---------- MP-MLQ (6.3 kbit/s) pulse search ----------
+//
+// Each pulse occupies a 3-bit "slot" index on a per-pulse track with stride
+// equal to the number of pulses. For `n` pulses, track `t ∈ 0..n` picks
+// positions `t + n*k + grid`, with `k ∈ 0..8` giving the 3-bit code.
+//
+// The search is a per-track greedy correlation maximiser (same shape as
+// [`acelp_4pulse_search`]) iterating both grid=0 and grid=1. This is a
+// simplification of the spec's joint position/amplitude MLQ refinement but
+// is internally consistent with [`decode_mpmlq_local`] and exercises the
+// full analysis / packing pipeline.
+
+/// MP-MLQ multipulse search. Returns `(positions, signs, grid)` with:
+///
+/// - `positions[t]` — 3-bit slot index on track `t`,
+/// - `signs[t]` — `+1` or `-1`,
+/// - `grid` — the shared 0/1 grid offset for this subframe.
+///
+/// Only the first `n_pulses` entries of the output arrays are populated;
+/// the rest are left at their default (zero position, +1 sign).
+fn mpmlq_pulse_search(
+    target: &[f32; SUBFRAME_SIZE],
+    h: &[f32],
+    n_pulses: usize,
+) -> ([u32; MPMLQ_PULSES_ODD], [i32; MPMLQ_PULSES_ODD], u8) {
+    debug_assert!(n_pulses <= MPMLQ_PULSES_ODD);
+    let d = compute_correlations(target, h);
+
+    let mut best_grid = 0u8;
+    let mut best_energy = -f32::INFINITY;
+    let mut best_positions = [0u32; MPMLQ_PULSES_ODD];
+    let mut best_signs = [1i32; MPMLQ_PULSES_ODD];
+
+    for grid in 0..2u8 {
+        let mut positions = [0u32; MPMLQ_PULSES_ODD];
+        let mut signs = [1i32; MPMLQ_PULSES_ODD];
+        let mut energy = 0.0f32;
+        let mut used = Vec::with_capacity(n_pulses);
+
+        for track in 0..n_pulses as u32 {
+            let mut best_score = 0.0f32;
+            let mut best_k = 0u32;
+            let mut best_sign = 1i32;
+            for k in 0..8u32 {
+                let pos = (track + n_pulses as u32 * k) as usize + grid as usize;
+                if pos >= SUBFRAME_SIZE {
+                    continue;
+                }
+                if used.contains(&pos) {
+                    continue;
+                }
+                let ap = autocorr_at(h, pos);
+                if ap < 1e-8 {
+                    continue;
+                }
+                let dv = d[pos];
+                let score = dv * dv / ap;
+                if score > best_score {
+                    best_score = score;
+                    best_k = k;
+                    best_sign = if dv >= 0.0 { 1 } else { -1 };
+                }
+            }
+            let pos_abs = (track + n_pulses as u32 * best_k) as usize + grid as usize;
+            positions[track as usize] = best_k;
+            signs[track as usize] = best_sign;
+            energy += best_score;
+            used.push(pos_abs);
+        }
+
+        if energy > best_energy {
+            best_energy = energy;
+            best_grid = grid;
+            best_positions = positions;
+            best_signs = signs;
+        }
+    }
+
+    (best_positions, best_signs, best_grid)
+}
+
+/// Place MP-MLQ pulses in the subframe buffer using the track layout used
+/// by [`mpmlq_pulse_search`] (track `t ∈ 0..n_pulses`, stride `n_pulses`).
+pub(crate) fn mpmlq_place_pulses(
+    positions: &[u32; MPMLQ_PULSES_ODD],
+    signs: &[i32; MPMLQ_PULSES_ODD],
+    n_pulses: usize,
+    grid: u8,
+    out: &mut [f32; SUBFRAME_SIZE],
+) {
+    out.fill(0.0);
+    for t in 0..n_pulses as u32 {
+        let k = positions[t as usize];
+        let pos = (t + n_pulses as u32 * k) as usize + grid as usize;
+        if pos < SUBFRAME_SIZE {
+            out[pos] = signs[t as usize] as f32;
+        }
+    }
+}
+
+/// Pack `n_pulses` MP-MLQ pulses into the low `n_pulses * 4` bits of the
+/// output: `[pos0_3 | sign0_1 | pos1_3 | sign1_1 | ...]`. The caller is
+/// responsible for budgeting the correct total bit count (24 bits for 6
+/// pulses, 20 bits for 5 pulses).
+fn pack_mpmlq_pulses(pulses: &MpMlqPulses) -> u32 {
+    let mut v = 0u32;
+    for t in 0..pulses.n_pulses as usize {
+        let pos = pulses.positions[t] & 0x7;
+        let sign_bit = if pulses.signs[t] < 0 { 1u32 } else { 0 };
+        let slot = (pos << 1) | sign_bit; // 4 bits per pulse
+        v |= slot << (t * 4);
+    }
+    v
+}
+
+/// Inverse of [`pack_mpmlq_pulses`]. Produces a populated [`MpMlqPulses`]
+/// with `n_pulses` entries.
+pub(crate) fn unpack_mpmlq_pulses(v: u32, n_pulses: usize) -> MpMlqPulses {
+    let mut out = MpMlqPulses::default();
+    out.n_pulses = n_pulses as u8;
+    for t in 0..n_pulses {
+        let slot = (v >> (t * 4)) & 0xF;
+        let pos = (slot >> 1) & 0x7;
+        let sign_bit = slot & 0x1;
+        out.positions[t] = pos;
+        out.signs[t] = if sign_bit == 1 { -1 } else { 1 };
+    }
+    out
+}
+
 // ---------- gain quantisation ----------
 
 fn quantise_gain(g_adapt: f32, g_fixed: f32) -> u32 {
@@ -1173,6 +1532,44 @@ fn pack_acelp_frame(f: &FrameFields) -> Vec<u8> {
     w.data
 }
 
+/// Pack an MP-MLQ frame (6.3 kbit/s) into a 24-byte payload.
+///
+/// Layout matches [`MPMLQ_FIELDS`]: 2-bit RATE=00 + 3×8-bit LSP + 7+2+7+2
+/// lag bits + 4×12-bit GAIN + 4 grid bits + {24,20,24,20}-bit MP pulses +
+/// 8-bit zero padding = 192 bits = 24 bytes.
+fn pack_mpmlq_frame(f: &MpMlqFrameFields) -> Vec<u8> {
+    let mut w = LsbBitWriter::with_len(MPMLQ_PAYLOAD_BYTES);
+    // RATE = 00 (MP-MLQ discriminator).
+    w.write(0b00, 2);
+    // LSP.
+    w.write(f.lsp_idx[0], 8);
+    w.write(f.lsp_idx[1], 8);
+    w.write(f.lsp_idx[2], 8);
+    // ACL (same widths as ACELP).
+    w.write(f.acl[0] as u32 & 0x7F, 7);
+    w.write(f.acl[1] as u32 & 0x3, 2);
+    w.write(f.acl[2] as u32 & 0x7F, 7);
+    w.write(f.acl[3] as u32 & 0x3, 2);
+    // GAIN (4 × 12 bits).
+    for s in 0..SUBFRAMES_PER_FRAME {
+        w.write(f.gain[s] & 0xFFF, 12);
+    }
+    // GRID (4 × 1 bit).
+    for s in 0..SUBFRAMES_PER_FRAME {
+        w.write(f.grid[s] as u32, 1);
+    }
+    // MP pulses per subframe: 6 × 4 bits (odd) or 5 × 4 bits (even).
+    for s in 0..SUBFRAMES_PER_FRAME {
+        let n = f.mp[s].n_pulses as u32;
+        let bits = n * (MPMLQ_POS_BITS + MPMLQ_SIGN_BITS);
+        let packed = pack_mpmlq_pulses(&f.mp[s]);
+        w.write(packed, bits);
+    }
+    // RSVD (8 bits of zero padding) to hit 24 bytes exactly.
+    w.write(0, 8);
+    w.data
+}
+
 /// Reference local decoder used by the round-trip tests. Reads a payload
 /// produced by this encoder and synthesises 240 S16 mono samples.
 ///
@@ -1281,6 +1678,120 @@ pub fn decode_acelp_local(payload: &[u8]) -> Result<Vec<i16>> {
     Ok(out)
 }
 
+/// Reference local decoder for MP-MLQ (6.3 kbit/s) frames, the sister of
+/// [`decode_acelp_local`]. Inverts [`pack_mpmlq_frame`] + the simplified
+/// LSP/gain VQs used here and synthesises 240 S16 mono samples. NOT a
+/// G.723.1-spec-compliant decoder (see module docstring).
+pub fn decode_mpmlq_local(payload: &[u8]) -> Result<Vec<i16>> {
+    if payload.len() < MPMLQ_PAYLOAD_BYTES {
+        return Err(Error::invalid(
+            "G.723.1 local decoder: MP-MLQ payload smaller than 24 bytes",
+        ));
+    }
+    let mut br = BitReader::new(&payload[..MPMLQ_PAYLOAD_BYTES]);
+    let rate = br.read_u32(2)?;
+    if rate != 0b00 {
+        return Err(Error::invalid(format!(
+            "G.723.1 local decoder: expected RATE=00, got {rate:02b}"
+        )));
+    }
+    let lsp_idx = [br.read_u32(8)?, br.read_u32(8)?, br.read_u32(8)?];
+    let lsp_q = dequantise_lsp(&lsp_idx);
+    let acl0 = br.read_u32(7)?;
+    let acl1 = br.read_u32(2)?;
+    let acl2 = br.read_u32(7)?;
+    let acl3 = br.read_u32(2)?;
+    let mut gain = [0u32; SUBFRAMES_PER_FRAME];
+    for s in 0..SUBFRAMES_PER_FRAME {
+        gain[s] = br.read_u32(12)?;
+    }
+    let mut grid = [0u8; SUBFRAMES_PER_FRAME];
+    for s in 0..SUBFRAMES_PER_FRAME {
+        grid[s] = br.read_u32(1)? as u8;
+    }
+    // MP pulses per subframe (must match pack order: 6 on odd, 5 on even).
+    let mut mp = [MpMlqPulses::default(); SUBFRAMES_PER_FRAME];
+    for s in 0..SUBFRAMES_PER_FRAME {
+        let n = if s % 2 == 0 {
+            MPMLQ_PULSES_ODD
+        } else {
+            MPMLQ_PULSES_EVEN
+        };
+        let bits = (n as u32) * (MPMLQ_POS_BITS + MPMLQ_SIGN_BITS);
+        let v = br.read_u32(bits)?;
+        mp[s] = unpack_mpmlq_pulses(v, n);
+    }
+    // RSVD: skip 8 bits of padding.
+    let _rsvd = br.read_u32(8)?;
+
+    // Decode lags.
+    let lag0 = decode_abs_lag(acl0);
+    let lag1 = decode_delta_lag(acl1, lag0);
+    let lag2 = decode_abs_lag(acl2);
+    let lag3 = decode_delta_lag(acl3, lag2);
+    let lags = [lag0, lag1, lag2, lag3];
+
+    // Synthesise.
+    let mut prev_lsp = [0.0f32; LPC_ORDER];
+    let step = std::f32::consts::PI / (LPC_ORDER as f32 + 1.0);
+    for k in 0..LPC_ORDER {
+        prev_lsp[k] = ((k as f32 + 1.0) * step).cos();
+    }
+    let mut exc_history = [0.0f32; PITCH_MAX + SUBFRAME_SIZE];
+    let mut syn_mem = [0.0f32; LPC_ORDER];
+    let mut pcm = [0.0f32; FRAME_SIZE_SAMPLES];
+
+    for s in 0..SUBFRAMES_PER_FRAME {
+        let lsp_interp = interpolate_lsp(s, &prev_lsp, &lsp_q);
+        let a_sub = lsp_to_lpc(&lsp_interp);
+
+        let mut adaptive = [0.0f32; SUBFRAME_SIZE];
+        copy_adaptive(&exc_history, lags[s], &mut adaptive);
+
+        let n_pulses = mp[s].n_pulses as usize;
+        let mut pulses = [0.0f32; SUBFRAME_SIZE];
+        mpmlq_place_pulses(&mp[s].positions, &mp[s].signs, n_pulses, grid[s], &mut pulses);
+
+        let (g_adapt, g_fixed) = dequantise_gain(gain[s]);
+        let mut exc = [0.0f32; SUBFRAME_SIZE];
+        for n in 0..SUBFRAME_SIZE {
+            exc[n] = g_adapt * adaptive[n] + g_fixed * pulses[n];
+        }
+
+        // LPC synthesis: 1/A(z).
+        let mut syn = [0.0f32; SUBFRAME_SIZE];
+        for i in 0..SUBFRAME_SIZE {
+            let mut y = exc[i];
+            for k in 0..LPC_ORDER {
+                y -= a_sub[k + 1] * syn_mem[k];
+            }
+            for k in (1..LPC_ORDER).rev() {
+                syn_mem[k] = syn_mem[k - 1];
+            }
+            syn_mem[0] = y;
+            syn[i] = y;
+        }
+        for i in 0..SUBFRAME_SIZE {
+            pcm[s * SUBFRAME_SIZE + i] = syn[i];
+        }
+
+        // Update history.
+        exc_history.rotate_left(SUBFRAME_SIZE);
+        let tail = exc_history.len() - SUBFRAME_SIZE;
+        exc_history[tail..].copy_from_slice(&exc);
+    }
+    prev_lsp = lsp_q;
+    let _ = prev_lsp;
+
+    // Clip and convert.
+    let mut out = Vec::with_capacity(FRAME_SIZE_SAMPLES);
+    for &v in &pcm {
+        let s = (v * 32_767.0).clamp(-32_768.0, 32_767.0);
+        out.push(s as i16);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1340,28 +1851,37 @@ mod tests {
     }
 
     #[test]
-    fn rejects_6300_bitrate_request() {
-        // MP-MLQ not implemented.
-        let result = make_encoder(&params(Some(6300)));
+    fn accepts_6300_bitrate_request() {
+        // MP-MLQ path is now implemented.
+        assert!(make_encoder(&params(Some(6300))).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_bitrate_request() {
+        // Bit rates outside the two codec modes stay Unsupported.
+        let result = make_encoder(&params(Some(8000)));
         let err = match result {
             Ok(_) => panic!("expected Unsupported, got Ok"),
             Err(e) => e,
         };
         assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
-        let msg = format!("{err}");
-        assert!(msg.contains("6.3 kbit/s"), "unexpected message: {msg}");
     }
 
     #[test]
     fn accepts_5300_bitrate_request() {
         assert!(make_encoder(&params(Some(5300))).is_ok());
-        // And no bit_rate hint at all = default ACELP.
-        assert!(make_encoder(&params(None)).is_ok());
+    }
+
+    #[test]
+    fn default_bitrate_is_mpmlq() {
+        // No bit_rate hint defaults to 6.3 kbit/s MP-MLQ.
+        let enc = make_encoder(&params(None)).unwrap();
+        assert_eq!(enc.output_params().bit_rate, Some(6_300));
     }
 
     #[test]
     fn silence_encodes_to_20_byte_acelp_packet() {
-        let mut enc = make_encoder(&params(None)).unwrap();
+        let mut enc = make_encoder(&params(Some(5300))).unwrap();
         let pcm = vec![0i16; FRAME_SIZE_SAMPLES];
         enc.send_frame(&audio_frame(&pcm)).unwrap();
         let pkt = enc.receive_packet().unwrap();
@@ -1371,8 +1891,19 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_decoder_accepts_encoder_output() {
-        let mut enc = make_encoder(&params(None)).unwrap();
+    fn silence_encodes_to_24_byte_mpmlq_packet() {
+        let mut enc = make_encoder(&params(Some(6300))).unwrap();
+        let pcm = vec![0i16; FRAME_SIZE_SAMPLES];
+        enc.send_frame(&audio_frame(&pcm)).unwrap();
+        let pkt = enc.receive_packet().unwrap();
+        assert_eq!(pkt.data.len(), MPMLQ_PAYLOAD_BYTES);
+        assert_eq!(pkt.data[0] & 0b11, 0b00, "discriminator must be 00");
+        assert_eq!(pkt.duration, Some(FRAME_SIZE_SAMPLES as i64));
+    }
+
+    #[test]
+    fn scaffold_decoder_accepts_acelp_encoder_output() {
+        let mut enc = make_encoder(&params(Some(5300))).unwrap();
         let pcm = sine_mixture(2);
         enc.send_frame(&audio_frame(&pcm)).unwrap();
 
@@ -1399,6 +1930,32 @@ mod tests {
     }
 
     #[test]
+    fn scaffold_decoder_accepts_mpmlq_encoder_output() {
+        let mut enc = make_encoder(&params(Some(6300))).unwrap();
+        let pcm = sine_mixture(2);
+        enc.send_frame(&audio_frame(&pcm)).unwrap();
+
+        let mut reg = oxideav_codec::CodecRegistry::new();
+        crate::register(&mut reg);
+        let mut dec = reg
+            .make_decoder(&params(None))
+            .expect("decoder factory must exist");
+
+        while let Ok(pkt) = enc.receive_packet() {
+            dec.send_packet(&pkt).unwrap();
+            let f = dec.receive_frame().unwrap();
+            match f {
+                Frame::Audio(af) => {
+                    assert_eq!(af.samples, FRAME_SIZE_SAMPLES as u32);
+                    assert_eq!(af.sample_rate, SAMPLE_RATE_HZ);
+                    assert_eq!(af.channels, 1);
+                }
+                _ => panic!("expected audio frame"),
+            }
+        }
+    }
+
+    #[test]
     fn roundtrip_sine_has_nonzero_energy_via_local_decoder() {
         // Encode a sum-of-sines signal, decode via the encoder's own
         // reference inverse (`decode_acelp_local`), and assert that the
@@ -1408,7 +1965,7 @@ mod tests {
         // docstring for the full caveat.
         const FRAMES: usize = 8;
         let input = sine_mixture(FRAMES);
-        let mut enc = make_encoder(&params(None)).unwrap();
+        let mut enc = make_encoder(&params(Some(5300))).unwrap();
         enc.send_frame(&audio_frame(&input)).unwrap();
         enc.flush().unwrap();
 
@@ -1458,8 +2015,67 @@ mod tests {
     }
 
     #[test]
+    fn mpmlq_roundtrip_sine_has_nonzero_energy_via_local_decoder() {
+        // Parallel to the ACELP round-trip test, for the 6.3 kbit/s MP-MLQ
+        // path. Encode a sum-of-sines signal at 6.3 kbit/s, decode via
+        // `decode_mpmlq_local`, assert non-trivial reconstructed energy
+        // (>= 1% of input energy, matching the ACELP bar).
+        const FRAMES: usize = 8;
+        let input = sine_mixture(FRAMES);
+        let mut enc = make_encoder(&params(Some(6300))).unwrap();
+        enc.send_frame(&audio_frame(&input)).unwrap();
+        enc.flush().unwrap();
+
+        let mut decoded: Vec<i16> = Vec::with_capacity(FRAMES * FRAME_SIZE_SAMPLES);
+        let mut n_packets = 0;
+        while let Ok(pkt) = enc.receive_packet() {
+            assert_eq!(pkt.data.len(), MPMLQ_PAYLOAD_BYTES);
+            assert_eq!(pkt.data[0] & 0b11, 0b00);
+            n_packets += 1;
+            let frame_pcm = decode_mpmlq_local(&pkt.data).unwrap();
+            assert_eq!(frame_pcm.len(), FRAME_SIZE_SAMPLES);
+            for &s in &frame_pcm {
+                assert!((s as i32).abs() <= i16::MAX as i32 + 1);
+            }
+            decoded.extend_from_slice(&frame_pcm);
+        }
+        assert_eq!(n_packets, FRAMES);
+
+        let energy: f64 = decoded.iter().map(|&s| (s as f64).powi(2)).sum();
+        assert!(energy > 0.0, "MP-MLQ decoded signal has zero energy");
+
+        let input_energy: f64 = input.iter().map(|&s| (s as f64).powi(2)).sum();
+        assert!(
+            energy >= 0.01 * input_energy,
+            "MP-MLQ decoded energy {:.3e} is too small vs input {:.3e}",
+            energy,
+            input_energy
+        );
+    }
+
+    #[test]
+    fn mpmlq_pulse_pack_round_trip() {
+        // Verify pack/unpack of MP-MLQ pulses is an identity for both
+        // 5-pulse and 6-pulse layouts.
+        for n in [MPMLQ_PULSES_EVEN, MPMLQ_PULSES_ODD] {
+            let mut p = MpMlqPulses::default();
+            p.n_pulses = n as u8;
+            for t in 0..n {
+                p.positions[t] = (t as u32 * 3 + 1) & 0x7;
+                p.signs[t] = if t % 2 == 0 { 1 } else { -1 };
+            }
+            let packed = pack_mpmlq_pulses(&p);
+            let unpacked = unpack_mpmlq_pulses(packed, n);
+            for t in 0..n {
+                assert_eq!(unpacked.positions[t], p.positions[t]);
+                assert_eq!(unpacked.signs[t], p.signs[t]);
+            }
+        }
+    }
+
+    #[test]
     fn multiple_frames_produce_rising_pts() {
-        let mut enc = make_encoder(&params(None)).unwrap();
+        let mut enc = make_encoder(&params(Some(5300))).unwrap();
         let pcm = sine_mixture(4);
         enc.send_frame(&audio_frame(&pcm)).unwrap();
         enc.flush().unwrap();
