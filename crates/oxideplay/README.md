@@ -1,6 +1,6 @@
 # oxideplay
 
-Reference media player for the [oxideav](https://github.com/KarpelesLab/oxideav)
+Reference media player for the [oxideav](https://github.com/OxideAV/oxideav-workspace)
 framework. Uses the library's pure-Rust demuxers + decoders and hands decoded
 frames to SDL2 for audio output and (optionally) video display.
 

@@ -62,8 +62,8 @@ version = "0.0.3"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT"
-repository = "https://github.com/KarpelesLab/oxideav"
-homepage = "https://github.com/KarpelesLab/oxideav"
+repository = "https://github.com/OxideAV/oxideav-workspace"
+homepage = "https://github.com/OxideAV/oxideav-workspace"
 authors = ["Mark Karpeles"]
 readme = "README.md"
 
