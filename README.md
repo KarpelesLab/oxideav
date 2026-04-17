@@ -176,26 +176,59 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 <details>
 <summary><strong>Subtitles</strong> (click to expand)</summary>
 
-All three formats parse to a unified IR (`SubtitleCue` with rich-text
+All text formats parse to a unified IR (`SubtitleCue` with rich-text
 `Segment`s: bold / italic / underline / strike / color / font / voice /
 class / karaoke / timestamp / raw) so cross-format conversion preserves
-as much styling as each pair can represent.
+as much styling as each pair can represent. Bitmap-native formats (PGS,
+DVB, VobSub) decode directly to `Frame::Video(Rgba)`.
 
-| Format | Parse | Write | Notes |
-|--------|:-----:|:-----:|-------|
-| **SRT** (SubRip) | ✅ | ✅ | `<b>/<i>/<u>/<s>`, `<font color>` hex + 17 named colors, `<font face size>` |
-| **WebVTT** | ✅ | ✅ | Header, STYLE ::cue(.class) blocks, REGION blocks, inline tags (b/i/u/c/v/lang/ruby/timestamp), cue settings (line/position/size/align) |
-| **ASS / SSA** | ✅ | ✅ | Script Info, V4+/V4 Styles (BGR+inverted-alpha colors), override tags (b/i/u/s/c/fn/fs/pos/an/k/kf/ko/N/n/h). Animated tags (\\t, \\fad, \\move, \\clip, \\fscx/y, \\frz, \\blur) preserved as opaque raw so text survives roundtrip |
+**Text formats** — in `oxideav-subtitle`:
 
-Cross-format transforms: `srt_to_webvtt`, `srt_to_ass`,
-`webvtt_to_srt`, `webvtt_to_ass`, `ass_to_srt`, `ass_to_webvtt`.
-Lossy downconversions strip what the target can't represent
-(positioning, karaoke timing, unsupported style attributes) but
-preserve `b/i/u/color` + line breaks everywhere.
+| Format              | Decode | Encode | Notes |
+|---------------------|:------:|:------:|-------|
+| **SRT** (SubRip)    | ✅ | ✅ | `<b>/<i>/<u>/<s>`, `<font color>` hex + 17 named, `<font face size>` |
+| **WebVTT**          | ✅ | ✅ | Header, STYLE ::cue(.class), REGION, inline b/i/u/c/v/lang/ruby/timestamp, cue settings |
+| **MicroDVD**        | ✅ | ✅ | frame-based, `{y:b/i/u/s}`, `{c:$BBGGRR}`, `{f:family}` |
+| **MPL2**            | ✅ | ✅ | decisecond timing, `/` italic, `\|` break |
+| **MPsub**           | ✅ | ✅ | relative-start timing, `FORMAT=TIME`, `TITLE=`/`AUTHOR=` |
+| **VPlayer**         | ✅ | ✅ | `HH:MM:SS:text`, end inferred |
+| **PJS**             | ✅ | ✅ | frame-based, quoted body |
+| **AQTitle**         | ✅ | ✅ | `-->> N` frame markers |
+| **JACOsub**         | ✅ | ✅ | `\B/\I/\U`, `#TITLE`/`#TIMERES` headers |
+| **RealText**        | ✅ | ✅ | HTML-like `<time>/<b>/<i>/<u>/<font>/<br/>` |
+| **SubViewer 1/2**   | ✅ | ✅ | marker-based v1, `[INFORMATION]` header v2 |
+| **TTML**            | ✅ | ✅ | W3C Timed Text, `<tt>/<head>/<styling>/<style>/<p>/<span>/<br/>`, tts:* styling |
+| **SAMI**            | ✅ | ✅ | Microsoft, `<SYNC Start=ms>` + `<STYLE>` CSS classes |
+| **EBU STL**         | ✅ | ✅ | ISO/IEC 18041 binary GSI+TTI (text mode only; bitmap + colour variants deferred) |
 
-In-container subtitles (MKV / MP4 subtitle tracks) are a scoped
-follow-up — standalone `.srt` / `.vtt` / `.ass` / `.ssa` files work
-today through the normal container + codec registry.
+**Advanced text (own crate)** — `oxideav-ass`:
+
+| Format              | Decode | Encode | Notes |
+|---------------------|:------:|:------:|-------|
+| **ASS / SSA**       | ✅ | ✅ | Script Info + V4+/V4 Styles (BGR+inv-alpha) + override tags (b/i/u/s/c/fn/fs/pos/an/k/kf/ko/N/n/h). Animated tags (`\t`, `\fad`, `\move`, `\clip`, `\fscx/y`, `\frz`, `\blur`) preserved as opaque raw so text survives round-trip |
+
+**Bitmap-native (own crate)** — `oxideav-sub-image`:
+
+| Format              | Decode | Encode | Notes |
+|---------------------|:------:|:------:|-------|
+| **PGS / HDMV** (`.sup`) | ✅ | — | Blu-ray subtitle stream; PCS/WDS/PDS/ODS + RLE + YCbCr palette → RGBA |
+| **DVB subtitles**   | ✅ | — | ETSI EN 300 743 segments + 2/4/8-bit pixel-coded objects |
+| **VobSub** (`.idx`+`.sub`) | ✅ | — | DVD SPU with control commands + RLE + 16-colour palette |
+
+**Cross-format transforms** (text side): `srt_to_webvtt`,
+`webvtt_to_srt` in `oxideav-subtitle`; `srt_to_ass`, `webvtt_to_ass`,
+`ass_to_srt`, `ass_to_webvtt` in `oxideav-ass`. Other pairs go through
+the unified IR directly (parse → IR → write).
+
+**Text → RGBA rendering** — any decoder producing `Frame::Subtitle` can
+be wrapped with `RenderedSubtitleDecoder::make_rendered_decoder(inner,
+width, height)` which emits `Frame::Video(Rgba)` at the caller-
+specified canvas size, one new frame per visible-state change.
+Embedded 8×16 bitmap font covers ASCII + Latin-1 supplement; bold via
+smear, italic via shear; 4-offset outline. No TrueType dep, no CJK.
+
+In-container subtitles (MKV / MP4 subtitle tracks) remain a scoped
+follow-up.
 
 </details>
 
