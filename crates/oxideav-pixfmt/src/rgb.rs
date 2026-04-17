@@ -16,10 +16,30 @@ pub struct Rgba4 {
 }
 
 /// Byte positions for each 4-channel packed format.
-pub const RGBA_POS: Rgba4 = Rgba4 { r: 0, g: 1, b: 2, a: 3 };
-pub const BGRA_POS: Rgba4 = Rgba4 { r: 2, g: 1, b: 0, a: 3 };
-pub const ARGB_POS: Rgba4 = Rgba4 { r: 1, g: 2, b: 3, a: 0 };
-pub const ABGR_POS: Rgba4 = Rgba4 { r: 3, g: 2, b: 1, a: 0 };
+pub const RGBA_POS: Rgba4 = Rgba4 {
+    r: 0,
+    g: 1,
+    b: 2,
+    a: 3,
+};
+pub const BGRA_POS: Rgba4 = Rgba4 {
+    r: 2,
+    g: 1,
+    b: 0,
+    a: 3,
+};
+pub const ARGB_POS: Rgba4 = Rgba4 {
+    r: 1,
+    g: 2,
+    b: 3,
+    a: 0,
+};
+pub const ABGR_POS: Rgba4 = Rgba4 {
+    r: 3,
+    g: 2,
+    b: 1,
+    a: 0,
+};
 
 /// Component index into a 3-byte packed pixel.
 #[derive(Clone, Copy)]

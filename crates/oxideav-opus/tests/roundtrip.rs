@@ -626,7 +626,11 @@ fn silk_60ms_nb_decodes() {
             Ok(_) => panic!("expected audio"),
             Err(Error::Unsupported(msg)) => {
                 if !msg.to_lowercase().contains("lbrr") {
-                    panic!("unexpected Unsupported on {} ms SILK: {}", if expected_samples == 2880 { 60 } else { 40 }, msg);
+                    panic!(
+                        "unexpected Unsupported on {} ms SILK: {}",
+                        if expected_samples == 2880 { 60 } else { 40 },
+                        msg
+                    );
                 }
             }
             Err(e) => panic!("decode error: {:?}", e),
@@ -637,10 +641,7 @@ fn silk_60ms_nb_decodes() {
         "expected ≥3 successful 40/60 ms SILK decodes, got {decoded}"
     );
     let rms = (total_energy / (decoded as f64 * expected_samples as f64)).sqrt();
-    assert!(
-        rms > 0.0001,
-        "40/60 ms SILK output is silent (RMS={rms})"
-    );
+    assert!(rms > 0.0001, "40/60 ms SILK output is silent (RMS={rms})");
 }
 
 /// Stereo SILK is now supported (RFC 6716 §4.2.7.1 + §4.2.8). Each

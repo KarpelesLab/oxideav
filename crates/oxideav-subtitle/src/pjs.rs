@@ -57,7 +57,12 @@ pub fn write(track: &SubtitleTrack) -> Result<Vec<u8>> {
     for cue in &track.cues {
         let sf = us_to_frame(cue.start_us, fps);
         let ef = us_to_frame(cue.end_us, fps);
-        out.push_str(&format!("{},{},\"{}\"\n", sf, ef, escape_pjs(&render_body(&cue.segments))));
+        out.push_str(&format!(
+            "{},{},\"{}\"\n",
+            sf,
+            ef,
+            escape_pjs(&render_body(&cue.segments))
+        ));
     }
     Ok(out.into_bytes())
 }
@@ -144,8 +149,7 @@ pub(crate) fn bytes_to_cue(bytes: &[u8]) -> Result<SubtitleCue> {
         .map(|l| l.trim_end_matches('\r').trim())
         .find(|l| !l.is_empty())
         .ok_or_else(|| Error::invalid("pjs: empty cue"))?;
-    let (sf, ef, body) =
-        parse_line(line).ok_or_else(|| Error::invalid("pjs: bad cue line"))?;
+    let (sf, ef, body) = parse_line(line).ok_or_else(|| Error::invalid("pjs: bad cue line"))?;
     Ok(SubtitleCue {
         start_us: frame_to_us(sf, DEFAULT_FPS),
         end_us: frame_to_us(ef, DEFAULT_FPS),
@@ -232,10 +236,9 @@ fn append_flat(segs: &[Segment], out: &mut String) {
         match seg {
             Segment::Text(s) => out.push_str(&s.replace('|', "/")),
             Segment::LineBreak => out.push('|'),
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => append_flat(c, out),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                append_flat(c, out)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

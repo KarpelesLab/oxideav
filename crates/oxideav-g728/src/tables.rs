@@ -28,7 +28,9 @@ const fn lcg_next(state: u32) -> u32 {
     // classic Bays/Durham split.
     let hi = state / 44488;
     let lo = state % 44488;
-    let t = 48271u32.wrapping_mul(lo).wrapping_sub(3399u32.wrapping_mul(hi));
+    let t = 48271u32
+        .wrapping_mul(lo)
+        .wrapping_sub(3399u32.wrapping_mul(hi));
     if t == 0 {
         2147483646
     } else {

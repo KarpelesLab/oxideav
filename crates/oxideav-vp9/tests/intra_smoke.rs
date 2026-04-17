@@ -141,7 +141,10 @@ fn inverse_dct_zero_residual_preserves_predictor() {
     let zero_coeffs = [0i32; 16];
     inverse_transform_add(TxType::DctDct, 4, 4, &zero_coeffs, &mut dst, 4).unwrap();
     for &v in &dst {
-        assert_eq!(v, 77, "zero-coefficient iDCT must leave predictor untouched");
+        assert_eq!(
+            v, 77,
+            "zero-coefficient iDCT must leave predictor untouched"
+        );
     }
 }
 
@@ -180,7 +183,10 @@ fn full_solid_colour_path_yields_uniform_block() {
     let zero = [0i32; 16];
     inverse_transform_add(TxType::DctDct, 4, 4, &zero, &mut block, 4).unwrap();
     for &v in &block {
-        assert_eq!(v, colour, "solid-colour I-frame pipeline produced wrong sample");
+        assert_eq!(
+            v, colour,
+            "solid-colour I-frame pipeline produced wrong sample"
+        );
     }
 }
 
@@ -227,7 +233,12 @@ fn unsupported_transform_sizes_have_precise_error_text() {
 fn unsupported_adst_and_wht_have_precise_error_text() {
     let coeffs = [0i32; 16];
     let mut dst = [0u8; 16];
-    for tx in [TxType::AdstDct, TxType::DctAdst, TxType::AdstAdst, TxType::WhtWht] {
+    for tx in [
+        TxType::AdstDct,
+        TxType::DctAdst,
+        TxType::AdstAdst,
+        TxType::WhtWht,
+    ] {
         match inverse_transform_add(tx, 4, 4, &coeffs, &mut dst, 4) {
             Err(Error::Unsupported(s)) => {
                 assert!(s.contains("§8.7.1"), "msg should ref §8.7.1: {s}");

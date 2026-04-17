@@ -121,7 +121,11 @@ fn vp8_lossy_webp_roundtrip_psnr_above_30() {
     let webp_bytes = pkt.data;
 
     // --- Container sanity: RIFF + WEBP + VP8  marker at the expected offsets.
-    assert!(webp_bytes.len() >= 20, "packet too small: {}", webp_bytes.len());
+    assert!(
+        webp_bytes.len() >= 20,
+        "packet too small: {}",
+        webp_bytes.len()
+    );
     assert_eq!(&webp_bytes[0..4], b"RIFF", "missing RIFF magic");
     assert_eq!(&webp_bytes[8..12], b"WEBP", "missing WEBP form type");
     assert_eq!(

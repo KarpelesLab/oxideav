@@ -105,9 +105,7 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
         header_done = true;
 
         let (rel_start_us, duration_us) = match mode {
-            Mode::Time => {
-                (seconds_to_us(rel_start), seconds_to_us(duration))
-            }
+            Mode::Time => (seconds_to_us(rel_start), seconds_to_us(duration)),
             Mode::Frames => {
                 let rs = frames_to_us(rel_start, fps);
                 let d = frames_to_us(duration, fps);
@@ -345,10 +343,9 @@ fn append_plain(segs: &[Segment], out: &mut String) {
         match seg {
             Segment::Text(s) => out.push_str(s),
             Segment::LineBreak => out.push('\n'),
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => append_plain(c, out),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                append_plain(c, out)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

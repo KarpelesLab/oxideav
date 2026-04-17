@@ -22,28 +22,16 @@ pub use oxideav_http as http;
 pub use oxideav_aac as aac;
 #[cfg(feature = "amv")]
 pub use oxideav_amv as amv;
-#[cfg(feature = "subtitle")]
-pub use oxideav_subtitle as subtitle;
-#[cfg(feature = "sub_image")]
-pub use oxideav_sub_image as sub_image;
 #[cfg(feature = "ass")]
 pub use oxideav_ass as ass;
-#[cfg(feature = "avif")]
-pub use oxideav_avif as avif;
-#[cfg(feature = "jpeg2000")]
-pub use oxideav_jpeg2000 as jpeg2000;
-#[cfg(feature = "jpegxl")]
-pub use oxideav_jpegxl as jpegxl;
 #[cfg(feature = "audio_filter")]
 pub use oxideav_audio_filter as audio_filter;
-#[cfg(feature = "pixfmt")]
-pub use oxideav_pixfmt as pixfmt;
-#[cfg(feature = "job")]
-pub use oxideav_job as job;
 #[cfg(feature = "av1")]
 pub use oxideav_av1 as av1;
 #[cfg(feature = "avi")]
 pub use oxideav_avi as avi;
+#[cfg(feature = "avif")]
+pub use oxideav_avif as avif;
 #[cfg(feature = "basic")]
 pub use oxideav_basic as basic;
 #[cfg(feature = "celt")]
@@ -62,6 +50,8 @@ pub use oxideav_g7231 as g7231;
 pub use oxideav_g728 as g728;
 #[cfg(feature = "g729")]
 pub use oxideav_g729 as g729;
+#[cfg(feature = "gif")]
+pub use oxideav_gif as gif;
 #[cfg(feature = "gsm")]
 pub use oxideav_gsm as gsm;
 #[cfg(feature = "h263")]
@@ -72,6 +62,12 @@ pub use oxideav_h264 as h264;
 pub use oxideav_h265 as h265;
 #[cfg(feature = "iff")]
 pub use oxideav_iff as iff;
+#[cfg(feature = "job")]
+pub use oxideav_job as job;
+#[cfg(feature = "jpeg2000")]
+pub use oxideav_jpeg2000 as jpeg2000;
+#[cfg(feature = "jpegxl")]
+pub use oxideav_jpegxl as jpegxl;
 #[cfg(feature = "mjpeg")]
 pub use oxideav_mjpeg as mjpeg;
 #[cfg(feature = "mkv")]
@@ -94,12 +90,20 @@ pub use oxideav_mpeg4video as mpeg4video;
 pub use oxideav_ogg as ogg;
 #[cfg(feature = "opus")]
 pub use oxideav_opus as opus;
+#[cfg(feature = "pixfmt")]
+pub use oxideav_pixfmt as pixfmt;
+#[cfg(feature = "png")]
+pub use oxideav_png as png;
 #[cfg(feature = "prores")]
 pub use oxideav_prores as prores;
 #[cfg(feature = "s3m")]
 pub use oxideav_s3m as s3m;
 #[cfg(feature = "speex")]
 pub use oxideav_speex as speex;
+#[cfg(feature = "sub_image")]
+pub use oxideav_sub_image as sub_image;
+#[cfg(feature = "subtitle")]
+pub use oxideav_subtitle as subtitle;
 #[cfg(feature = "theora")]
 pub use oxideav_theora as theora;
 #[cfg(feature = "vorbis")]
@@ -110,10 +114,6 @@ pub use oxideav_vp8 as vp8;
 pub use oxideav_vp9 as vp9;
 #[cfg(feature = "webp")]
 pub use oxideav_webp as webp;
-#[cfg(feature = "gif")]
-pub use oxideav_gif as gif;
-#[cfg(feature = "png")]
-pub use oxideav_png as png;
 
 /// A pair of registries populated with every format enabled at build time.
 pub struct Registries {

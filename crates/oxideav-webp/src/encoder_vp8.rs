@@ -42,10 +42,7 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
 
 /// Build a VP8-lossy WebP encoder with an explicit qindex (0..=127).
 /// Lower values produce higher quality at the cost of file size.
-pub fn make_encoder_with_qindex(
-    params: &CodecParameters,
-    qindex: u8,
-) -> Result<Box<dyn Encoder>> {
+pub fn make_encoder_with_qindex(params: &CodecParameters, qindex: u8) -> Result<Box<dyn Encoder>> {
     let width = params
         .width
         .ok_or_else(|| Error::invalid("VP8 WebP encoder: missing width"))?;

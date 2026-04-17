@@ -205,8 +205,7 @@ impl Mp1Encoder {
         let n_ch = self.channels as usize;
 
         // Drain 384 samples/channel from the queue.
-        let mut pcm_in: Vec<[f32; SAMPLES_PER_FRAME]> =
-            vec![[0.0f32; SAMPLES_PER_FRAME]; n_ch];
+        let mut pcm_in: Vec<[f32; SAMPLES_PER_FRAME]> = vec![[0.0f32; SAMPLES_PER_FRAME]; n_ch];
         for ch in 0..n_ch {
             for i in 0..SAMPLES_PER_FRAME {
                 pcm_in[ch][i] = self.pcm_queue[ch][i];
@@ -535,10 +534,7 @@ mod tests {
         let denom = (1u32 << 15) - 1;
         let level = raw as i32 - (1i32 << 14) + 1;
         let recovered = level as f32 * 2.0 / denom as f32 * sf_mag;
-        assert!(
-            (recovered - s).abs() < 1e-3,
-            "recovered {recovered} vs {s}"
-        );
+        assert!((recovered - s).abs() < 1e-3, "recovered {recovered} vs {s}");
     }
 
     #[test]

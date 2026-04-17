@@ -160,7 +160,10 @@ fn open_fmt<F: FormatOps>(input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> 
     )))
 }
 
-fn mux_fmt<F: FormatOps>(out: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Box<dyn Muxer>> {
+fn mux_fmt<F: FormatOps>(
+    out: Box<dyn WriteSeek>,
+    streams: &[StreamInfo],
+) -> Result<Box<dyn Muxer>> {
     Ok(Box::new(GenericTextSubtitleMuxer::<F>::new(out, streams)?))
 }
 

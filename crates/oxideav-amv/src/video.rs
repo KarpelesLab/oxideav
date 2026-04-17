@@ -401,7 +401,9 @@ impl Encoder for AmvVideoEncoder {
 /// and runs up to the next non-stuffed, non-RST marker.
 fn strip_jpeg_headers(jpeg: &[u8]) -> Result<Vec<u8>> {
     if jpeg.len() < 4 || jpeg[0] != 0xFF || jpeg[1] != markers::SOI {
-        return Err(Error::invalid("AMV video encoder: MJPEG output missing SOI"));
+        return Err(Error::invalid(
+            "AMV video encoder: MJPEG output missing SOI",
+        ));
     }
     let mut out = Vec::with_capacity(jpeg.len());
     out.push(0xFF);

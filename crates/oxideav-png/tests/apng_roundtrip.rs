@@ -44,7 +44,11 @@ fn apng_three_frames_roundtrip_byte_identical() {
 
     let mut enc = oxideav_png::encoder::make_encoder(&params).expect("make encoder");
 
-    let frames = vec![make_frame(0, w, h), make_frame(1, w, h), make_frame(2, w, h)];
+    let frames = vec![
+        make_frame(0, w, h),
+        make_frame(1, w, h),
+        make_frame(2, w, h),
+    ];
     for f in &frames {
         enc.send_frame(&Frame::Video(f.clone())).expect("send");
     }

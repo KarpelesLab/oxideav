@@ -229,9 +229,9 @@ fn append_flat(
                 line_italic.push(false);
             }
             Segment::Italic(c) => append_flat(c, lines, line_italic, true),
-            Segment::Bold(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => append_flat(c, lines, line_italic, italic),
+            Segment::Bold(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                append_flat(c, lines, line_italic, italic)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

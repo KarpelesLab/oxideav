@@ -315,9 +315,7 @@ impl SvxMuxer {
         metadata: &[(String, String)],
     ) -> Result<Self> {
         if streams.len() != 1 {
-            return Err(Error::unsupported(
-                "8SVX supports exactly one audio stream",
-            ));
+            return Err(Error::unsupported("8SVX supports exactly one audio stream"));
         }
         let s = &streams[0];
         if s.params.media_type != MediaType::Audio {

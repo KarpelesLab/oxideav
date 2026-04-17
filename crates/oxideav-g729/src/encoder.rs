@@ -42,12 +42,9 @@ use oxideav_core::{
 
 use crate::bitreader::pitch_parity;
 use crate::lpc::{interpolate_lsp, lsp_to_lpc, LpcPredictorState, MA_HISTORY};
-use crate::lsp_tables::{
-    FG_Q15, FG_SUM_Q15, LSPCB1_Q13, LSPCB2_Q13, MA_NP, M_HALF, NC0, NC1,
-};
+use crate::lsp_tables::{FG_Q15, FG_SUM_Q15, LSPCB1_Q13, LSPCB2_Q13, MA_NP, M_HALF, NC0, NC1};
 use crate::synthesis::{
-    adaptive_codebook_excitation, fixed_codebook_excitation, GBK1, GBK2, SynthesisState,
-    EXC_HIST,
+    adaptive_codebook_excitation, fixed_codebook_excitation, SynthesisState, EXC_HIST, GBK1, GBK2,
 };
 use crate::{
     CODEC_ID_STR, FRAME_BYTES, FRAME_SAMPLES, LPC_ORDER, SAMPLE_RATE, SUBFRAMES_PER_FRAME,
@@ -160,9 +157,7 @@ impl Encoder for G729Encoder {
             _ => return Err(Error::invalid("G.729 encoder: audio frames only")),
         };
         if af.channels != 1 || af.sample_rate != SAMPLE_RATE {
-            return Err(Error::invalid(
-                "G.729 encoder: input must be mono, 8000 Hz",
-            ));
+            return Err(Error::invalid("G.729 encoder: input must be mono, 8000 Hz"));
         }
         if af.format != SampleFormat::S16 {
             return Err(Error::invalid(
@@ -244,7 +239,11 @@ fn pack_frame(fp: &EncodedFrame) -> Vec<u8> {
     let mut out = vec![0u8; FRAME_BYTES];
     let mut bit_pos: u32 = 0;
     for (val, width) in fields {
-        let mask = if width == 32 { u32::MAX } else { (1u32 << width) - 1 };
+        let mask = if width == 32 {
+            u32::MAX
+        } else {
+            (1u32 << width) - 1
+        };
         let v = val & mask;
         for b in (0..width).rev() {
             let bit = (v >> b) & 1;
@@ -312,8 +311,7 @@ impl EncoderState {
         let lsp_unq = lpc_to_lsp(&a);
 
         // -------- 4. Quantise LSPs using the decoder's codebooks --------
-        let (l0, l1, l2, l3, lsp_q) =
-            quantise_lsp_with_predictor(&mut self.lpc, &lsp_unq);
+        let (l0, l1, l2, l3, lsp_q) = quantise_lsp_with_predictor(&mut self.lpc, &lsp_unq);
 
         // -------- 5. Per-subframe LPC via LSP interpolation --------
         let lsp_sf0 = interpolate_lsp(&self.lpc.lsp_prev, &lsp_q, 0.5);
@@ -339,8 +337,11 @@ impl EncoderState {
             target.copy_from_slice(&residual[off..off + SUBFRAME_SAMPLES]);
 
             // ---- 6a. Pitch search ----
-            let (t_int, t_frac) =
-                pitch_search(&self.syn.exc, &target, if sf == 0 { None } else { Some(first_p1_int) });
+            let (t_int, t_frac) = pitch_search(
+                &self.syn.exc,
+                &target,
+                if sf == 0 { None } else { Some(first_p1_int) },
+            );
             if sf == 0 {
                 first_p1_int = t_int;
                 let p1 = encode_pitch_p1(t_int, t_frac);
@@ -782,7 +783,10 @@ fn quantise_lsp_with_predictor(
 
 /// Compute per-frame LPC residual using per-subframe A(z) coefficients.
 /// `r[n] = s[n] + sum_{k=1..10} a[k] * s[n-k]`.
-fn lpc_residual(sig: &[f32; FRAME_SAMPLES], a_sf: &[[f32; LPC_ORDER + 1]; 2]) -> [f32; FRAME_SAMPLES] {
+fn lpc_residual(
+    sig: &[f32; FRAME_SAMPLES],
+    a_sf: &[[f32; LPC_ORDER + 1]; 2],
+) -> [f32; FRAME_SAMPLES] {
     let mut mem = [0.0f32; LPC_ORDER];
     let mut out = [0.0f32; FRAME_SAMPLES];
     for sf in 0..SUBFRAMES_PER_FRAME {

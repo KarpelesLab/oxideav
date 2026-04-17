@@ -181,11 +181,7 @@ impl PngEncoder {
 
 // ---- Single-image encode -----------------------------------------------
 
-pub fn encode_single(
-    frame: &VideoFrame,
-    pix: PixelFormat,
-    palette: &[u8],
-) -> Result<Vec<u8>> {
+pub fn encode_single(frame: &VideoFrame, pix: PixelFormat, palette: &[u8]) -> Result<Vec<u8>> {
     let (ihdr, row_bytes, plte_bytes, trns_bytes) = ihdr_and_row_bytes(frame, pix, palette)?;
     let raw_pixels = flatten_and_normalise_pixels(frame, pix, row_bytes)?;
     let idat = deflate_encode_pixels(&raw_pixels, row_bytes, frame.height as usize, &ihdr)?;
@@ -394,8 +390,7 @@ fn encode_apng(enc: &PngEncoder) -> Result<Vec<u8>> {
         return Err(Error::invalid("PNG encoder: no frames for APNG"));
     }
     let pix = enc.pix;
-    let (ihdr, row_bytes, plte, trns) =
-        ihdr_and_row_bytes(&enc.frames[0], pix, &enc.palette)?;
+    let (ihdr, row_bytes, plte, trns) = ihdr_and_row_bytes(&enc.frames[0], pix, &enc.palette)?;
 
     let num_plays: u32 = 0; // loop forever by default
     let actl = Actl {
@@ -437,8 +432,7 @@ fn encode_apng(enc: &PngEncoder) -> Result<Vec<u8>> {
         seq += 1;
 
         let raw = flatten_and_normalise_pixels(frame, pix, row_bytes)?;
-        let compressed =
-            deflate_encode_pixels(&raw, row_bytes, ihdr.height as usize, &ihdr)?;
+        let compressed = deflate_encode_pixels(&raw, row_bytes, ihdr.height as usize, &ihdr)?;
 
         if idx == 0 {
             // First frame is the default image → IDAT.

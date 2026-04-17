@@ -264,10 +264,7 @@ fn deinterlace(src: &[u8], w: usize, h: usize) -> Vec<u8> {
 /// Convenience wrapper to pull a `TimeBase`-tagged frame without wiring
 /// up the full decoder trait — used by the container's own smoke tests.
 #[allow(dead_code)]
-pub(crate) fn decode_packet_frame(
-    params: &CodecParameters,
-    pkt: &Packet,
-) -> Result<VideoFrame> {
+pub(crate) fn decode_packet_frame(params: &CodecParameters, pkt: &Packet) -> Result<VideoFrame> {
     let mut d = make_decoder(params)?;
     d.send_packet(pkt)?;
     match d.receive_frame()? {

@@ -835,7 +835,9 @@ mod tests {
         let mut fir = [0.0f32; NB_ORDER];
         let mut iir = [0.0f32; NB_ORDER];
         let mut tilt = 0.0f32;
-        formant_postfilter(&mut buf, &num, &den, NB_ORDER, &mut fir, &mut iir, &mut tilt, 0.3);
+        formant_postfilter(
+            &mut buf, &num, &den, NB_ORDER, &mut fir, &mut iir, &mut tilt, 0.3,
+        );
         let out_rms = rms(&buf);
         assert!(
             (out_rms - input_rms).abs() / input_rms.max(1e-9) < 1e-3,

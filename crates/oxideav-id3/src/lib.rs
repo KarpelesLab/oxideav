@@ -255,7 +255,9 @@ pub fn to_key_value_pairs(tag: &Id3Tag) -> Vec<(String, String)> {
                     push_unique(&mut out, key, value);
                 }
             }
-            Id3Frame::Comment { description, text, .. } => {
+            Id3Frame::Comment {
+                description, text, ..
+            } => {
                 if !text.is_empty() {
                     let key = if description.is_empty() {
                         "comment".to_string()
@@ -265,7 +267,9 @@ pub fn to_key_value_pairs(tag: &Id3Tag) -> Vec<(String, String)> {
                     push_unique(&mut out, key, text.clone());
                 }
             }
-            Id3Frame::Lyrics { description, text, .. } => {
+            Id3Frame::Lyrics {
+                description, text, ..
+            } => {
                 if !text.is_empty() {
                     let key = if description.is_empty() {
                         "lyrics".to_string()
@@ -495,9 +499,7 @@ fn parse_v24_frame(buf: &[u8]) -> Result<(Id3Frame, usize)> {
     // we just skip past the indicator.
     if data_length_indicator {
         if payload.len() < 4 {
-            return Err(Error::invalid(
-                "v2.4 frame data-length indicator truncated",
-            ));
+            return Err(Error::invalid("v2.4 frame data-length indicator truncated"));
         }
         payload = &payload[4..];
     }
@@ -776,7 +778,9 @@ fn parse_pic(payload: &[u8]) -> Id3Frame {
         b"PNG" | b"png" => "image/png".to_string(),
         other => format!(
             "image/{}",
-            std::str::from_utf8(other).unwrap_or("").to_ascii_lowercase()
+            std::str::from_utf8(other)
+                .unwrap_or("")
+                .to_ascii_lowercase()
         ),
     };
     Id3Frame::Picture(AttachedPicture {
@@ -939,28 +943,154 @@ fn push_unique(out: &mut Vec<(String, String)>, key: String, value: String) {
 /// 0xFF = "no genre") return None.
 fn id3v1_genre(b: u8) -> Option<&'static str> {
     const GENRES: &[&str] = &[
-        "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop",
-        "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop", "R&B", "Rap",
-        "Reggae", "Rock", "Techno", "Industrial", "Alternative", "Ska", "Death Metal", "Pranks",
-        "Soundtrack", "Euro-Techno", "Ambient", "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion",
-        "Trance", "Classical", "Instrumental", "Acid", "House", "Game", "Sound Clip",
-        "Gospel", "Noise", "AlternRock", "Bass", "Soul", "Punk", "Space", "Meditative",
-        "Instrumental Pop", "Instrumental Rock", "Ethnic", "Gothic", "Darkwave",
-        "Techno-Industrial", "Electronic", "Pop-Folk", "Eurodance", "Dream", "Southern Rock",
-        "Comedy", "Cult", "Gangsta", "Top 40", "Christian Rap", "Pop/Funk", "Jungle",
-        "Native American", "Cabaret", "New Wave", "Psychadelic", "Rave", "Showtunes",
-        "Trailer", "Lo-Fi", "Tribal", "Acid Punk", "Acid Jazz", "Polka", "Retro", "Musical",
-        "Rock & Roll", "Hard Rock", "Folk", "Folk-Rock", "National Folk", "Swing",
-        "Fast Fusion", "Bebob", "Latin", "Revival", "Celtic", "Bluegrass", "Avantgarde",
-        "Gothic Rock", "Progressive Rock", "Psychedelic Rock", "Symphonic Rock", "Slow Rock",
-        "Big Band", "Chorus", "Easy Listening", "Acoustic", "Humour", "Speech", "Chanson",
-        "Opera", "Chamber Music", "Sonata", "Symphony", "Booty Bass", "Primus", "Porn Groove",
-        "Satire", "Slow Jam", "Club", "Tango", "Samba", "Folklore", "Ballad", "Power Ballad",
-        "Rhythmic Soul", "Freestyle", "Duet", "Punk Rock", "Drum Solo", "A capella",
-        "Euro-House", "Dance Hall", "Goa", "Drum & Bass", "Club-House", "Hardcore", "Terror",
-        "Indie", "BritPop", "Negerpunk", "Polsk Punk", "Beat", "Christian Gangsta Rap",
-        "Heavy Metal", "Black Metal", "Crossover", "Contemporary Christian", "Christian Rock",
-        "Merengue", "Salsa", "Thrash Metal", "Anime", "JPop", "Synthpop",
+        "Blues",
+        "Classic Rock",
+        "Country",
+        "Dance",
+        "Disco",
+        "Funk",
+        "Grunge",
+        "Hip-Hop",
+        "Jazz",
+        "Metal",
+        "New Age",
+        "Oldies",
+        "Other",
+        "Pop",
+        "R&B",
+        "Rap",
+        "Reggae",
+        "Rock",
+        "Techno",
+        "Industrial",
+        "Alternative",
+        "Ska",
+        "Death Metal",
+        "Pranks",
+        "Soundtrack",
+        "Euro-Techno",
+        "Ambient",
+        "Trip-Hop",
+        "Vocal",
+        "Jazz+Funk",
+        "Fusion",
+        "Trance",
+        "Classical",
+        "Instrumental",
+        "Acid",
+        "House",
+        "Game",
+        "Sound Clip",
+        "Gospel",
+        "Noise",
+        "AlternRock",
+        "Bass",
+        "Soul",
+        "Punk",
+        "Space",
+        "Meditative",
+        "Instrumental Pop",
+        "Instrumental Rock",
+        "Ethnic",
+        "Gothic",
+        "Darkwave",
+        "Techno-Industrial",
+        "Electronic",
+        "Pop-Folk",
+        "Eurodance",
+        "Dream",
+        "Southern Rock",
+        "Comedy",
+        "Cult",
+        "Gangsta",
+        "Top 40",
+        "Christian Rap",
+        "Pop/Funk",
+        "Jungle",
+        "Native American",
+        "Cabaret",
+        "New Wave",
+        "Psychadelic",
+        "Rave",
+        "Showtunes",
+        "Trailer",
+        "Lo-Fi",
+        "Tribal",
+        "Acid Punk",
+        "Acid Jazz",
+        "Polka",
+        "Retro",
+        "Musical",
+        "Rock & Roll",
+        "Hard Rock",
+        "Folk",
+        "Folk-Rock",
+        "National Folk",
+        "Swing",
+        "Fast Fusion",
+        "Bebob",
+        "Latin",
+        "Revival",
+        "Celtic",
+        "Bluegrass",
+        "Avantgarde",
+        "Gothic Rock",
+        "Progressive Rock",
+        "Psychedelic Rock",
+        "Symphonic Rock",
+        "Slow Rock",
+        "Big Band",
+        "Chorus",
+        "Easy Listening",
+        "Acoustic",
+        "Humour",
+        "Speech",
+        "Chanson",
+        "Opera",
+        "Chamber Music",
+        "Sonata",
+        "Symphony",
+        "Booty Bass",
+        "Primus",
+        "Porn Groove",
+        "Satire",
+        "Slow Jam",
+        "Club",
+        "Tango",
+        "Samba",
+        "Folklore",
+        "Ballad",
+        "Power Ballad",
+        "Rhythmic Soul",
+        "Freestyle",
+        "Duet",
+        "Punk Rock",
+        "Drum Solo",
+        "A capella",
+        "Euro-House",
+        "Dance Hall",
+        "Goa",
+        "Drum & Bass",
+        "Club-House",
+        "Hardcore",
+        "Terror",
+        "Indie",
+        "BritPop",
+        "Negerpunk",
+        "Polsk Punk",
+        "Beat",
+        "Christian Gangsta Rap",
+        "Heavy Metal",
+        "Black Metal",
+        "Crossover",
+        "Contemporary Christian",
+        "Christian Rock",
+        "Merengue",
+        "Salsa",
+        "Thrash Metal",
+        "Anime",
+        "JPop",
+        "Synthpop",
     ];
     GENRES.get(b as usize).copied()
 }
@@ -1006,7 +1136,7 @@ mod tests {
         tag.push(3); // major
         tag.push(0); // revision
         tag.push(0); // flags
-        // synchsafe size
+                     // synchsafe size
         let s = size as u32;
         tag.push(((s >> 21) & 0x7F) as u8);
         tag.push(((s >> 14) & 0x7F) as u8);

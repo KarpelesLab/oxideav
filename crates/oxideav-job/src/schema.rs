@@ -76,7 +76,11 @@ pub struct TrackSpec {
     /// codec crates interpret their own keys. Named `codec_params` rather
     /// than `params` so it cannot collide with a flattened filter's
     /// `params` when the track itself is a filter node.
-    #[serde(default, rename = "codec_params", skip_serializing_if = "is_null_or_empty")]
+    #[serde(
+        default,
+        rename = "codec_params",
+        skip_serializing_if = "is_null_or_empty"
+    )]
     pub params: serde_json::Value,
     /// Optional stream filter applied after the upstream source/filter
     /// emits N streams.
@@ -379,7 +383,10 @@ mod tests {
         let j = Job::from_json(
             r#"{"o.wav": {"audio": [{"from": "x", "stream_selector": {"type": "audio", "index": 1}}]}}"#,
         ).unwrap();
-        let sel = j.outputs["o.wav"].audio[0].stream_selector.as_ref().unwrap();
+        let sel = j.outputs["o.wav"].audio[0]
+            .stream_selector
+            .as_ref()
+            .unwrap();
         assert_eq!(sel.kind, Some(MediaType::Audio));
         assert_eq!(sel.index, Some(1));
 
@@ -387,16 +394,17 @@ mod tests {
             r#"{"o.wav": {"audio": [{"from": "x", "stream_selector": {"kind": "subtitles"}}]}}"#,
         )
         .unwrap();
-        let sel = j.outputs["o.wav"].audio[0].stream_selector.as_ref().unwrap();
+        let sel = j.outputs["o.wav"].audio[0]
+            .stream_selector
+            .as_ref()
+            .unwrap();
         assert_eq!(sel.kind, Some(MediaType::Subtitle));
     }
 
     #[test]
     fn parses_threads_meta_key() {
-        let j = Job::from_json(
-            r#"{"threads": 4, "out.wav": {"audio": [{"from": "in.wav"}]}}"#,
-        )
-        .unwrap();
+        let j = Job::from_json(r#"{"threads": 4, "out.wav": {"audio": [{"from": "in.wav"}]}}"#)
+            .unwrap();
         assert_eq!(j.threads, Some(4));
         assert_eq!(j.outputs.len(), 1);
         assert!(j.aliases.is_empty());

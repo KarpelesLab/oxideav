@@ -86,8 +86,7 @@ impl JobSink for PlayerSink {
     }
 
     fn write_frame(&mut self, _kind: MediaType, frame: &Frame) -> Result<()> {
-        let max_samples =
-            (self.audio_rate as u64 * self.max_buffered.as_millis() as u64) / 1000;
+        let max_samples = (self.audio_rate as u64 * self.max_buffered.as_millis() as u64) / 1000;
         // Back-pressure: if the audio queue is already full, pause the
         // decode loop briefly so we don't build an unbounded memory
         // buffer while SDL drains the device.

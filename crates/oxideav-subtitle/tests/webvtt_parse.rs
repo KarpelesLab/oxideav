@@ -34,7 +34,10 @@ second line
 fn parses_header_and_style() {
     let t = webvtt::parse(SAMPLE.as_bytes()).unwrap();
     // Header trailing stored in metadata.
-    assert!(t.metadata.iter().any(|(k, v)| k == "header" && v == "Language: en"));
+    assert!(t
+        .metadata
+        .iter()
+        .any(|(k, v)| k == "header" && v == "Language: en"));
     // Two style classes + one region.
     let yellow = t.styles.iter().find(|s| s.name == "yellow").unwrap();
     assert!(yellow.bold);
@@ -100,10 +103,9 @@ fn visit<F: FnMut(&Segment)>(segs: &[Segment], f: &mut F) {
     for s in segs {
         f(s);
         match s {
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => visit(c, f),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                visit(c, f)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

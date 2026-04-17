@@ -509,7 +509,8 @@ fn read_job_source(file: Option<String>, inline: Option<String>) -> oxideav::cor
     if let Some(s) = inline {
         return Ok(s);
     }
-    let path = file.ok_or_else(|| Error::invalid("no job source (pass a file path or --inline)"))?;
+    let path =
+        file.ok_or_else(|| Error::invalid("no job source (pass a file path or --inline)"))?;
     if path == "-" {
         use std::io::Read;
         let mut buf = String::new();

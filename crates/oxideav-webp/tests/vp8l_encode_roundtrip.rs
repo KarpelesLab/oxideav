@@ -6,8 +6,8 @@
 //! fallbacks required. Each test asserts byte-identical RGBA output
 //! after the round trip, since VP8L is lossless.
 
-use oxideav_webp::vp8l;
 use oxideav_webp::encode_vp8l_argb;
+use oxideav_webp::vp8l;
 
 /// Pack an R,G,B,A byte slice into ARGB u32 pixels (the layout the VP8L
 /// encoder expects).
@@ -32,8 +32,7 @@ fn roundtrip(width: u32, height: u32, rgba: &[u8], has_alpha: bool) {
         "test rgba buffer has wrong length"
     );
     let pixels = rgba_bytes_to_argb_pixels(rgba);
-    let bitstream =
-        encode_vp8l_argb(width, height, &pixels, has_alpha).expect("encode succeeds");
+    let bitstream = encode_vp8l_argb(width, height, &pixels, has_alpha).expect("encode succeeds");
     let decoded = vp8l::decode(&bitstream).expect("decode succeeds");
     assert_eq!(decoded.width, width);
     assert_eq!(decoded.height, height);
@@ -51,9 +50,7 @@ fn roundtrip(width: u32, height: u32, rgba: &[u8], has_alpha: bool) {
                 }
             }
         }
-        panic!(
-            "VP8L roundtrip differs at {diff_count} byte(s); first diff @ {first_diff:?}"
-        );
+        panic!("VP8L roundtrip differs at {diff_count} byte(s); first diff @ {first_diff:?}");
     }
 }
 

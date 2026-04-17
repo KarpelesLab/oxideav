@@ -11,9 +11,7 @@
 use std::collections::VecDeque;
 use std::io::{Read, SeekFrom, Write};
 
-use oxideav_container::{
-    ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek,
-};
+use oxideav_container::{ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek};
 use oxideav_core::{
     CodecId, CodecParameters, Error, MediaType, Packet, Result, StreamInfo, TimeBase,
 };

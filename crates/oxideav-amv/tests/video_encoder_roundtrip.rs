@@ -11,8 +11,7 @@
 
 use oxideav_codec::CodecRegistry;
 use oxideav_core::{
-    frame::VideoPlane, CodecId, CodecParameters, Frame, PixelFormat, Rational, TimeBase,
-    VideoFrame,
+    frame::VideoPlane, CodecId, CodecParameters, Frame, PixelFormat, Rational, TimeBase, VideoFrame,
 };
 
 const W: u32 = 64;
@@ -45,8 +44,8 @@ fn make_test_frame() -> VideoFrame {
                     // noise floor doesn't swamp the PSNR on the noise
                     // quadrant — baseline JPEG ruthlessly quantises
                     // high-frequency content in DCT space.
-                    let mut x = (j as u32).wrapping_mul(2654435761)
-                        ^ (i as u32).wrapping_mul(40503);
+                    let mut x =
+                        (j as u32).wrapping_mul(2654435761) ^ (i as u32).wrapping_mul(40503);
                     x ^= x >> 13;
                     x = x.wrapping_mul(0x5bd1e995);
                     x ^= x >> 15;
@@ -78,10 +77,7 @@ fn make_test_frame() -> VideoFrame {
         pts: Some(0),
         time_base: TimeBase::new(1, 30),
         planes: vec![
-            VideoPlane {
-                stride: w,
-                data: y,
-            },
+            VideoPlane { stride: w, data: y },
             VideoPlane {
                 stride: cw,
                 data: cb,

@@ -61,11 +61,11 @@
 use std::collections::VecDeque;
 
 use oxideav_codec::Encoder;
+#[cfg(test)]
+use oxideav_core::AudioFrame;
 use oxideav_core::{
     CodecId, CodecParameters, Error, Frame, MediaType, Packet, Result, SampleFormat, TimeBase,
 };
-#[cfg(test)]
-use oxideav_core::AudioFrame;
 
 use crate::bitreader::BitReader;
 use crate::tables::{
@@ -696,8 +696,9 @@ fn lpc_analysis(sig: &[f32; FRAME_SIZE_SAMPLES]) -> [f32; LPC_ORDER + 1] {
     // correction, ~40 Hz lag window).
     r[0] *= 1.0001;
     for k in 1..=LPC_ORDER {
-        let w = (-0.5 * (2.0 * std::f32::consts::PI * 60.0 * k as f32 / SAMPLE_RATE_HZ as f32)
-            .powi(2)) as f64;
+        let w = (-0.5
+            * (2.0 * std::f32::consts::PI * 60.0 * k as f32 / SAMPLE_RATE_HZ as f32).powi(2))
+            as f64;
         r[k] *= w.exp();
     }
 
@@ -906,11 +907,7 @@ fn lsp_to_lpc(lsp: &[f32; LPC_ORDER]) -> [f32; LPC_ORDER + 1] {
 
 /// Interpolate LSP vectors between the previous and current frame for
 /// subframe `k in 0..4`.
-fn interpolate_lsp(
-    k: usize,
-    prev: &[f32; LPC_ORDER],
-    cur: &[f32; LPC_ORDER],
-) -> [f32; LPC_ORDER] {
+fn interpolate_lsp(k: usize, prev: &[f32; LPC_ORDER], cur: &[f32; LPC_ORDER]) -> [f32; LPC_ORDER] {
     let (wp, wc) = match k {
         0 => (0.75, 0.25),
         1 => (0.50, 0.50),
@@ -1030,11 +1027,7 @@ fn open_loop_pitch(target: &[f32], history: &[f32]) -> i32 {
             } else {
                 hlen + (n - lag as usize)
             };
-            let cand = if idx < hlen {
-                history[idx]
-            } else {
-                0.0
-            };
+            let cand = if idx < hlen { history[idx] } else { 0.0 };
             num += target[n] * cand;
             den += cand * cand;
         }
@@ -1750,7 +1743,13 @@ pub fn decode_mpmlq_local(payload: &[u8]) -> Result<Vec<i16>> {
 
         let n_pulses = mp[s].n_pulses as usize;
         let mut pulses = [0.0f32; SUBFRAME_SIZE];
-        mpmlq_place_pulses(&mp[s].positions, &mp[s].signs, n_pulses, grid[s], &mut pulses);
+        mpmlq_place_pulses(
+            &mp[s].positions,
+            &mp[s].signs,
+            n_pulses,
+            grid[s],
+            &mut pulses,
+        );
 
         let (g_adapt, g_fixed) = dequantise_gain(gain[s]);
         let mut exc = [0.0f32; SUBFRAME_SIZE];
@@ -2090,7 +2089,9 @@ mod tests {
     #[test]
     fn lsp_quantisation_round_trips_to_valid_vector() {
         // Verify LSPs stay strictly ordered after encode / decode.
-        let lsp = [0.95f32, 0.80, 0.55, 0.30, 0.05, -0.15, -0.40, -0.60, -0.80, -0.95];
+        let lsp = [
+            0.95f32, 0.80, 0.55, 0.30, 0.05, -0.15, -0.40, -0.60, -0.80, -0.95,
+        ];
         let (idx, q) = quantise_lsp(&lsp);
         assert!(idx.iter().all(|&i| i < 256));
         for k in 1..LPC_ORDER {

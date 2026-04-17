@@ -313,7 +313,11 @@ fn classify_tag(tag: &str, rest: &str) -> Option<Segment> {
             let mut children: Vec<Segment> = Vec::new();
             parse_line(rest, &mut children);
             Some(Segment::Font {
-                family: if family.is_empty() { None } else { Some(family) },
+                family: if family.is_empty() {
+                    None
+                } else {
+                    Some(family)
+                },
                 size: None,
                 children,
             })
@@ -372,7 +376,9 @@ fn append_inline(segments: &[Segment], out: &mut String) {
                 out.push_str(&format!("{{c:${:02X}{:02X}{:02X}}}", b, g, r));
                 append_inline(children, out);
             }
-            Segment::Font { family, children, .. } => {
+            Segment::Font {
+                family, children, ..
+            } => {
                 if let Some(f) = family {
                     out.push_str(&format!("{{f:{}}}", f));
                 }

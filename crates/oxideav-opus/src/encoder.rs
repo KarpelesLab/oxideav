@@ -235,9 +235,7 @@ fn extract_mono_f32(audio: &AudioFrame) -> Result<Vec<f32>> {
         SampleFormat::S16P => {
             // One plane per channel. Mono = plane 0, stereo = two planes.
             if audio.data.len() < ch {
-                return Err(Error::invalid(
-                    "opus encoder: S16P input missing planes",
-                ));
+                return Err(Error::invalid("opus encoder: S16P input missing planes"));
             }
             for i in 0..n {
                 let mut acc = 0i32;
@@ -279,9 +277,7 @@ fn extract_mono_f32(audio: &AudioFrame) -> Result<Vec<f32>> {
         }
         SampleFormat::F32P => {
             if audio.data.len() < ch {
-                return Err(Error::invalid(
-                    "opus encoder: F32P input missing planes",
-                ));
+                return Err(Error::invalid("opus encoder: F32P input missing planes"));
             }
             for i in 0..n {
                 let mut acc = 0f32;

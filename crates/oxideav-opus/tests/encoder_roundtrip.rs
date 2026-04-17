@@ -260,7 +260,10 @@ fn stereo_phase_offset_roundtrip_has_energy_both_channels() {
 
     let mut enc = make_opus_encoder(2);
     let mut all_packets = Vec::new();
-    for (lc, rc) in l.chunks(OPUS_FRAME_SAMPLES).zip(r.chunks(OPUS_FRAME_SAMPLES)) {
+    for (lc, rc) in l
+        .chunks(OPUS_FRAME_SAMPLES)
+        .zip(r.chunks(OPUS_FRAME_SAMPLES))
+    {
         if lc.len() < OPUS_FRAME_SAMPLES {
             break;
         }
@@ -278,7 +281,10 @@ fn stereo_phase_offset_roundtrip_has_energy_both_channels() {
         let toc = Toc::parse(pkt.data[0]);
         assert_eq!(toc.mode, OpusMode::CeltOnly);
         assert_eq!(toc.frame_samples_48k, 960);
-        assert!(!toc.stereo, "first-cut encoder emits mono TOC even for stereo input");
+        assert!(
+            !toc.stereo,
+            "first-cut encoder emits mono TOC even for stereo input"
+        );
     }
 
     // Ask the decoder for stereo output — it splats the mono decode

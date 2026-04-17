@@ -28,9 +28,7 @@
 
 use std::io::{Read, SeekFrom, Write};
 
-use oxideav_container::{
-    ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek,
-};
+use oxideav_container::{ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek};
 use oxideav_core::{
     CodecId, CodecParameters, Error, MediaType, Packet, PixelFormat, Result, StreamInfo, TimeBase,
 };
@@ -95,10 +93,7 @@ fn open(mut input: Box<dyn ReadSeek>) -> Result<Box<dyn Demuxer>> {
     }))
 }
 
-fn open_muxer(
-    output: Box<dyn WriteSeek>,
-    streams: &[StreamInfo],
-) -> Result<Box<dyn Muxer>> {
+fn open_muxer(output: Box<dyn WriteSeek>, streams: &[StreamInfo]) -> Result<Box<dyn Muxer>> {
     if streams.len() != 1 {
         return Err(Error::invalid(
             "GIF muxer: exactly one video stream is required",
@@ -815,7 +810,10 @@ mod tests {
     fn probe_gif89a() {
         let mut buf = vec![0u8; 16];
         buf[..6].copy_from_slice(b"GIF89a");
-        let p = ProbeData { buf: &buf, ext: None };
+        let p = ProbeData {
+            buf: &buf,
+            ext: None,
+        };
         assert_eq!(probe(&p), 100);
     }
 
@@ -823,14 +821,20 @@ mod tests {
     fn probe_gif87a() {
         let mut buf = vec![0u8; 16];
         buf[..6].copy_from_slice(b"GIF87a");
-        let p = ProbeData { buf: &buf, ext: None };
+        let p = ProbeData {
+            buf: &buf,
+            ext: None,
+        };
         assert_eq!(probe(&p), 100);
     }
 
     #[test]
     fn probe_other() {
         let buf = vec![0u8; 16];
-        let p = ProbeData { buf: &buf, ext: None };
+        let p = ProbeData {
+            buf: &buf,
+            ext: None,
+        };
         assert_eq!(probe(&p), 0);
     }
 }

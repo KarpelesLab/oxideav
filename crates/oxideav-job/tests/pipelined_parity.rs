@@ -107,7 +107,8 @@ fn serial_pipelined_parity_copy_path() {
     let s_bytes = std::fs::read(&serial).unwrap();
     let p_bytes = std::fs::read(&pipe).unwrap();
     assert_eq!(
-        s_bytes, p_bytes,
+        s_bytes,
+        p_bytes,
         "copy-path byte mismatch between serial and pipelined ({} vs {} bytes)",
         s_bytes.len(),
         p_bytes.len()

@@ -383,8 +383,7 @@ fn classify_font_tag(full_tag: &str, children: Vec<Segment>) -> Segment {
     }
     // Nothing recognisable — keep as raw so we don't lose the opener.
     // (Rendering uses children directly — the raw tag reappears on write.)
-    Segment::Raw(format!("<{}>", full_tag))
-        .wrap_with(children)
+    Segment::Raw(format!("<{}>", full_tag)).wrap_with(children)
 }
 
 trait SegmentExt {
@@ -594,9 +593,7 @@ mod tests {
 
     #[test]
     fn looks_like_srt_true() {
-        assert!(looks_like_srt(
-            b"1\n00:00:01,000 --> 00:00:02,000\nHi\n"
-        ));
+        assert!(looks_like_srt(b"1\n00:00:01,000 --> 00:00:02,000\nHi\n"));
     }
 
     #[test]

@@ -16,8 +16,8 @@
 use crate::cwrs::{encode_pulses, pvq_search};
 use crate::range_encoder::{RangeEncoder, BITRES};
 use crate::tables::{
-    bitexact_cos, bitexact_log2tan, get_pulses, CACHE_BITS50, CACHE_INDEX50, EBAND_5MS,
-    LOGN400, NB_EBANDS, QTHETA_OFFSET, QTHETA_OFFSET_TWOPHASE, SPREAD_AGGRESSIVE, SPREAD_NONE,
+    bitexact_cos, bitexact_log2tan, get_pulses, CACHE_BITS50, CACHE_INDEX50, EBAND_5MS, LOGN400,
+    NB_EBANDS, QTHETA_OFFSET, QTHETA_OFFSET_TWOPHASE, SPREAD_AGGRESSIVE, SPREAD_NONE,
 };
 
 const NORM_SCALING: f32 = 1.0;
@@ -271,7 +271,9 @@ fn compute_and_encode_theta(
     // Compute true theta from the input halves.
     let e_mid: f32 = x_mid.iter().take(n as usize).map(|v| v * v).sum();
     let e_side: f32 = x_side.iter().take(n as usize).map(|v| v * v).sum();
-    let theta_true = (e_side.sqrt().atan2(e_mid.sqrt())).max(0.0).min(std::f32::consts::FRAC_PI_2);
+    let theta_true = (e_side.sqrt().atan2(e_mid.sqrt()))
+        .max(0.0)
+        .min(std::f32::consts::FRAC_PI_2);
     // Scale so theta_true=0 → itheta=0, theta_true=pi/2 → itheta=16384.
     let itheta_true = ((theta_true / std::f32::consts::FRAC_PI_2) * 16384.0).round() as i32;
     let itheta_true = itheta_true.clamp(0, 16384);
@@ -357,16 +359,16 @@ fn compute_and_encode_theta(
 }
 
 /// Encoder analog of `quant_band_n1`.
-fn quant_band_n1_enc(
-    ctx: &mut BandCtx,
-    rc: &mut RangeEncoder,
-    x: &mut [f32],
-) -> u32 {
+fn quant_band_n1_enc(ctx: &mut BandCtx, rc: &mut RangeEncoder, x: &mut [f32]) -> u32 {
     if ctx.remaining_bits >= 1 << BITRES {
         let sign = if x[0] < 0.0 { 1u32 } else { 0 };
         rc.encode_bits(sign, 1);
         ctx.remaining_bits -= 1 << BITRES;
-        x[0] = if sign != 0 { -NORM_SCALING } else { NORM_SCALING };
+        x[0] = if sign != 0 {
+            -NORM_SCALING
+        } else {
+            NORM_SCALING
+        };
     } else {
         x[0] = NORM_SCALING;
     }

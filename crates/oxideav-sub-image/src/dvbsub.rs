@@ -32,8 +32,7 @@ use std::collections::{HashMap, VecDeque};
 
 use oxideav_codec::Decoder;
 use oxideav_core::{
-    CodecId, CodecParameters, Error, Frame, Packet, PixelFormat, Result, VideoFrame,
-    VideoPlane,
+    CodecId, CodecParameters, Error, Frame, Packet, PixelFormat, Result, VideoFrame, VideoPlane,
 };
 
 use crate::DVBSUB_CODEC_ID;
@@ -807,7 +806,7 @@ pub fn build_demo_pes(canvas: (u16, u16), pixels: &[u8], width: usize, height: u
     region.push(0); // clut_id
     region.push(0); // 8-bit pixel code
     region.push(0); // 4/2-bit codes
-    // object entry
+                    // object entry
     region.extend_from_slice(&0u16.to_be_bytes()); // object_id + obj_type(0)
     region.extend_from_slice(&0u16.to_be_bytes()); // x
     region.extend_from_slice(&0u16.to_be_bytes()); // y
@@ -817,14 +816,14 @@ pub fn build_demo_pes(canvas: (u16, u16), pixels: &[u8], width: usize, height: u
     let mut clut = Vec::new();
     clut.push(0); // clut_id
     clut.push(0); // version
-    // Entry 1 → white. Y=255, Cr=128, Cb=128, T=0.
+                  // Entry 1 → white. Y=255, Cr=128, Cb=128, T=0.
     clut.push(1); // entry_id
     clut.push(0xFF); // flags — mark "full precision" (bit 0) + 8-bit type bits
     clut.push(255); // Y
     clut.push(128); // Cr
     clut.push(128); // Cb
     clut.push(0); // T
-    // Entry 2 → red.
+                  // Entry 2 → red.
     clut.push(2);
     clut.push(0xFF);
     clut.push(81); // approximate Y for red
@@ -836,7 +835,7 @@ pub fn build_demo_pes(canvas: (u16, u16), pixels: &[u8], width: usize, height: u
     // Object data: 8-bit pixel-coded string, two rows top+bottom.
     let mut obj = Vec::new();
     obj.extend_from_slice(&0u16.to_be_bytes()); // object_id
-    // coding_method = 0 in bits 3..4 of byte[2]. Rest zero.
+                                                // coding_method = 0 in bits 3..4 of byte[2]. Rest zero.
     obj.push(0);
     // Build top-field / bottom-field line blocks.
     fn encode_rows_8bit(rows: &[Vec<u8>]) -> Vec<u8> {

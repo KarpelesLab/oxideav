@@ -418,10 +418,9 @@ fn append_segments(segments: &[Segment], out: &mut String) {
         match seg {
             Segment::Text(s) => out.push_str(s),
             Segment::LineBreak => out.push('|'),
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => append_segments(c, out),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                append_segments(c, out)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }
@@ -465,7 +464,11 @@ pub(crate) fn bytes_to_cue(bytes: &[u8]) -> Result<SubtitleCue> {
         .trim();
     let (start, end) =
         parse_timing_line(ts_line).ok_or_else(|| Error::invalid("subviewer2: bad timing"))?;
-    let body = if lines.len() > 1 { lines[1..].join("\n") } else { String::new() };
+    let body = if lines.len() > 1 {
+        lines[1..].join("\n")
+    } else {
+        String::new()
+    };
     let segments = parse_body(&body);
     Ok(SubtitleCue {
         start_us: start,
@@ -517,7 +520,10 @@ Last
     #[test]
     fn parses_metadata() {
         let t = parse(SAMPLE.as_bytes()).unwrap();
-        assert!(t.metadata.iter().any(|(k, v)| k == "title" && v == "Example"));
+        assert!(t
+            .metadata
+            .iter()
+            .any(|(k, v)| k == "title" && v == "Example"));
         assert!(t.metadata.iter().any(|(k, v)| k == "author" && v == "Me"));
     }
 

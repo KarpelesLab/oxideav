@@ -312,9 +312,8 @@ impl Mp2Encoder {
         // allocations grow; scalefactor/SCFSI spend is recomputed each
         // time an allocation transitions 0 → non-zero since allocation=0
         // means no SCFSI, no scalefactors.
-        let total_overhead_sample_budget = frame_bits as i64
-            - header_bits as i64
-            - bitalloc_bits as i64;
+        let total_overhead_sample_budget =
+            frame_bits as i64 - header_bits as i64 - bitalloc_bits as i64;
         if total_overhead_sample_budget < 0 {
             return Err(Error::other("MP2 encoder: frame too small for header"));
         }
@@ -337,8 +336,7 @@ impl Mp2Encoder {
                     }
                     let next = cur + 1;
                     // Cost = extra bits this upgrade would need.
-                    let cost =
-                        upgrade_cost_bits(table, sb, cur, next, scfsi[ch][sb]);
+                    let cost = upgrade_cost_bits(table, sb, cur, next, scfsi[ch][sb]);
                     // Score: prefer large energy subbands upgraded
                     // cheaply. Use energy/cost as a proxy for
                     // SNR-per-bit; add a small epsilon so zero-energy
@@ -448,13 +446,7 @@ impl Mp2Encoder {
                         }
                         let entry = class_entry(table, sb, a);
                         let sf_mag = scalefactor_magnitude(scf_idx[ch][sb][gr]);
-                        write_triple(
-                            &mut w,
-                            entry,
-                            &sub[ch][sb],
-                            base_idx,
-                            sf_mag,
-                        );
+                        write_triple(&mut w, entry, &sub[ch][sb], base_idx, sf_mag);
                     }
                 }
             }
@@ -516,7 +508,9 @@ impl Encoder for Mp2Encoder {
 /// Reverse-map a bitrate in kbps to its 4-bit header-field index (1..=14
 /// for MPEG-1 Layer II). Returns `None` for unsupported values.
 fn bitrate_to_index(kbps: u32) -> Option<u32> {
-    const LUT: [u32; 14] = [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
+    const LUT: [u32; 14] = [
+        32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384,
+    ];
     LUT.iter()
         .position(|&v| v == kbps)
         .map(|idx| (idx + 1) as u32)
@@ -591,13 +585,7 @@ fn sample_bits_per_subband_for_class(table: &AllocTable, sb: usize, a: u8) -> u3
 /// Accounts for sample bits, SCFSI bits (2, paid once per channel when
 /// allocation transitions 0 → non-zero), and scalefactor bits (6 per SF
 /// field, count determined by SCFSI).
-fn upgrade_cost_bits(
-    table: &AllocTable,
-    sb: usize,
-    cur: u8,
-    next: u8,
-    scfsi: u8,
-) -> u32 {
+fn upgrade_cost_bits(table: &AllocTable, sb: usize, cur: u8, next: u8, scfsi: u8) -> u32 {
     let cur_sample = sample_bits_per_subband_for_class(table, sb, cur);
     let next_sample = sample_bits_per_subband_for_class(table, sb, next);
     let mut cost = next_sample.saturating_sub(cur_sample);

@@ -20,8 +20,8 @@ use std::collections::VecDeque;
 
 use crate::bitwriter::BitWriter;
 use crate::header::{SPEEX_HEADER_SIZE, SPEEX_SIGNATURE};
-use crate::nb_encoder::{NbEncoder, SUPPORTED_SUBMODE};
 use crate::nb_decoder::NB_FRAME_SIZE;
+use crate::nb_encoder::{NbEncoder, SUPPORTED_SUBMODE};
 
 /// Encoder factory. Accepts NB (8 kHz mono S16) parameter sets. The
 /// caller may override `bit_rate` to pick a sub-mode — currently only

@@ -103,9 +103,7 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
                 }
                 "title" | "author" | "comment" | "source" | "director" | "prg" | "qtitle" => {
                     if !value.is_empty() {
-                        track
-                            .metadata
-                            .push((key_lc, value.trim().to_string()));
+                        track.metadata.push((key_lc, value.trim().to_string()));
                     }
                 }
                 _ => {
@@ -416,7 +414,11 @@ fn parse_jss_timestamp(s: &str, timeres: u32) -> Option<i64> {
             parts[1].parse::<i64>().ok()?,
             parts[2].parse::<i64>().ok()?,
         ),
-        2 => (0i64, parts[0].parse::<i64>().ok()?, parts[1].parse::<i64>().ok()?),
+        2 => (
+            0i64,
+            parts[0].parse::<i64>().ok()?,
+            parts[1].parse::<i64>().ok()?,
+        ),
         1 => (0i64, 0i64, parts[0].parse::<i64>().ok()?),
         _ => return None,
     };

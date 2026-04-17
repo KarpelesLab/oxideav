@@ -284,9 +284,8 @@ impl PlayerState {
             // Detect SDx (note delay) before applying the row: when x > 0,
             // we stash the cell and skip the usual tick-0 trigger so the
             // note fires at tick x instead.
-            let is_note_delay = ch.command == cmd::S_EXTENDED
-                && (ch.info >> 4) == 0xD
-                && (ch.info & 0x0F) != 0;
+            let is_note_delay =
+                ch.command == cmd::S_EXTENDED && (ch.info >> 4) == 0xD && (ch.info & 0x0F) != 0;
 
             if is_note_delay {
                 ch.pending_delay = Some(PendingTrigger {
@@ -449,8 +448,11 @@ impl PlayerState {
         let tick = self.tick;
         // Clone sample metadata we need for deferred SDx triggers. Can't
         // borrow `&self.samples` inside the mutable-channel loop.
-        let samples_snapshot: Vec<(u32, u8)> =
-            self.samples.iter().map(|s| (s.c5_speed.max(1), s.volume)).collect();
+        let samples_snapshot: Vec<(u32, u8)> = self
+            .samples
+            .iter()
+            .map(|s| (s.c5_speed.max(1), s.volume))
+            .collect();
         for ch in &mut self.channels {
             let x = ch.info >> 4;
             let y = ch.info & 0x0F;

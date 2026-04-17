@@ -35,12 +35,7 @@ impl FilterType {
 /// `row`. `prev_row` is the previous row's already-reconstructed bytes (may
 /// be an all-zero slice for the first row). `bpp` is the byte-distance to
 /// the "left" pixel — at least 1, as specified by RFC 2083.
-pub fn unfilter_row(
-    filter: FilterType,
-    row: &mut [u8],
-    prev_row: &[u8],
-    bpp: usize,
-) -> Result<()> {
+pub fn unfilter_row(filter: FilterType, row: &mut [u8], prev_row: &[u8], bpp: usize) -> Result<()> {
     if prev_row.len() != row.len() {
         return Err(Error::invalid(
             "PNG unfilter: prev_row length must match row length",
@@ -86,13 +81,7 @@ pub fn unfilter_row(
 /// Filter one row. `row` holds the raw pixel bytes; output is written to
 /// `out` (must be same length as `row`). `prev_row` is the previous row's
 /// *raw* bytes (zeros for first row — per the spec).
-pub fn filter_row(
-    filter: FilterType,
-    row: &[u8],
-    prev_row: &[u8],
-    bpp: usize,
-    out: &mut [u8],
-) {
+pub fn filter_row(filter: FilterType, row: &[u8], prev_row: &[u8], bpp: usize, out: &mut [u8]) {
     debug_assert_eq!(row.len(), out.len());
     debug_assert_eq!(row.len(), prev_row.len());
     match filter {

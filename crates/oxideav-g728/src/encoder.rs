@@ -51,9 +51,7 @@ use oxideav_core::{
 
 use crate::decoder::{G728State, VECTORS_PER_BLOCK};
 use crate::tables::{GAIN_CB, SHAPE_CB};
-use crate::{
-    CODEC_ID_STR, GAIN_CB_SIZE, LPC_ORDER, SAMPLE_RATE, SHAPE_CB_SIZE, VECTOR_SIZE,
-};
+use crate::{CODEC_ID_STR, GAIN_CB_SIZE, LPC_ORDER, SAMPLE_RATE, SHAPE_CB_SIZE, VECTOR_SIZE};
 
 /// Four 10-bit indices packed MSB-first into one packet.
 pub const VECTORS_PER_PACKET: usize = 4;
@@ -213,9 +211,7 @@ impl Encoder for G728Encoder {
             _ => return Err(Error::invalid("G.728 encoder: audio frames only")),
         };
         if af.channels != 1 || af.sample_rate != SAMPLE_RATE {
-            return Err(Error::invalid(
-                "G.728 encoder: input must be mono, 8000 Hz",
-            ));
+            return Err(Error::invalid("G.728 encoder: input must be mono, 8000 Hz"));
         }
         if af.format != SampleFormat::S16 {
             return Err(Error::invalid(
@@ -289,8 +285,7 @@ pub(crate) fn encode_vector(state: &mut G728State, target: &[f32; VECTOR_SIZE]) 
 
     // Pre-compute ZSR for each shape codeword: output of 1/A(z) fed
     // shape[0..5] with zero memory.
-    let mut zsr: [[f32; VECTOR_SIZE]; SHAPE_CB_SIZE] =
-        [[0.0; VECTOR_SIZE]; SHAPE_CB_SIZE];
+    let mut zsr: [[f32; VECTOR_SIZE]; SHAPE_CB_SIZE] = [[0.0; VECTOR_SIZE]; SHAPE_CB_SIZE];
     for s in 0..SHAPE_CB_SIZE {
         zsr[s] = compute_zsr(&state.lpc.a, &SHAPE_CB[s]);
     }
@@ -364,10 +359,7 @@ fn compute_zir(a: &[f32; LPC_ORDER + 1], history: &[f32; LPC_ORDER]) -> [f32; VE
 /// Apply the all-pole synthesis filter to `excitation` with **zero** filter
 /// memory, returning the 5-sample output. This is the "zero-state
 /// response" used in the linear decomposition `y = ZIR + ZSR`.
-fn compute_zsr(
-    a: &[f32; LPC_ORDER + 1],
-    excitation: &[f32; VECTOR_SIZE],
-) -> [f32; VECTOR_SIZE] {
+fn compute_zsr(a: &[f32; LPC_ORDER + 1], excitation: &[f32; VECTOR_SIZE]) -> [f32; VECTOR_SIZE] {
     let mut hist = [0.0_f32; LPC_ORDER];
     let mut out = [0.0_f32; VECTOR_SIZE];
     for n in 0..VECTOR_SIZE {

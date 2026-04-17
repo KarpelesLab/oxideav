@@ -351,7 +351,10 @@ impl SilkDecoder {
         }
 
         // Concatenate per-packet-frame outputs.
-        let total = out_per_packet_frame_interleaved.iter().map(|v| v.len()).sum();
+        let total = out_per_packet_frame_interleaved
+            .iter()
+            .map(|v| v.len())
+            .sum();
         let mut out = Vec::with_capacity(total);
         for chunk in out_per_packet_frame_interleaved {
             out.extend_from_slice(&chunk);

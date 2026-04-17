@@ -31,15 +31,15 @@ use crate::bitreader::{parse_frame_params, FrameParams};
 use crate::lpc::{decode_lsp, interpolate_lsp, lsp_to_lpc, LpcPredictorState};
 use crate::synthesis::{
     adaptive_codebook_excitation, agc, decode_gain_indices, decode_pitch_p1, decode_pitch_p2,
-    fixed_codebook_excitation, innovation_log_energy_db, pitch_emphasis_postfilter,
-    pitch_sharpen, predict_fixed_gain, short_term_postfilter, synthesise, tilt_compensation,
-    SynthesisState, EXC_HIST,
-};
-use crate::{
-    CODEC_ID_STR, FRAME_BYTES, FRAME_SAMPLES, SAMPLE_RATE, SUBFRAMES_PER_FRAME, SUBFRAME_SAMPLES,
+    fixed_codebook_excitation, innovation_log_energy_db, pitch_emphasis_postfilter, pitch_sharpen,
+    predict_fixed_gain, short_term_postfilter, synthesise, tilt_compensation, SynthesisState,
+    EXC_HIST,
 };
 #[cfg(test)]
 use crate::LPC_ORDER;
+use crate::{
+    CODEC_ID_STR, FRAME_BYTES, FRAME_SAMPLES, SAMPLE_RATE, SUBFRAMES_PER_FRAME, SUBFRAME_SAMPLES,
+};
 
 /// Build a boxed [`Decoder`] for a G.729 stream.
 pub fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
@@ -126,12 +126,7 @@ impl G729Decoder {
             let a = &a_sf[sf];
             // 4a. Adaptive-codebook excitation.
             let mut ac = [0.0f32; SUBFRAME_SAMPLES];
-            adaptive_codebook_excitation(
-                &self.syn.exc,
-                pitch_int[sf],
-                pitch_frac[sf],
-                &mut ac,
-            );
+            adaptive_codebook_excitation(&self.syn.exc, pitch_int[sf], pitch_frac[sf], &mut ac);
             // 4b. Fixed-codebook pulse vector.
             let mut fc = [0.0f32; SUBFRAME_SAMPLES];
             fixed_codebook_excitation(codebook_c[sf], codebook_s[sf], &mut fc);
@@ -163,12 +158,7 @@ impl G729Decoder {
             self.syn.gain_log_hist[0] = new_gain_db;
             // 4h. LPC synthesis filter.
             let mut synthesised = [0.0f32; SUBFRAME_SAMPLES];
-            synthesise(
-                &excitation,
-                a,
-                &mut self.syn.syn_mem,
-                &mut synthesised,
-            );
+            synthesise(&excitation, a, &mut self.syn.syn_mem, &mut synthesised);
             // Keep a copy of pre-postfilter signal for AGC reference.
             let pre_post = synthesised;
             // 4i. Postfilter: short-term (γ1/γ2) + pitch emphasis + tilt + AGC.
@@ -301,7 +291,11 @@ mod tests {
         let mut out = vec![0u8; FRAME_BYTES];
         let mut bit_pos: u32 = 0;
         for (val, width) in fields {
-            let mask = if width == 32 { u32::MAX } else { (1u32 << width) - 1 };
+            let mask = if width == 32 {
+                u32::MAX
+            } else {
+                (1u32 << width) - 1
+            };
             let v = val & mask;
             for b in (0..width).rev() {
                 let bit = (v >> b) & 1;
@@ -383,7 +377,10 @@ mod tests {
         // A reasonable synthesis-filter impulse response peaks in
         // the low tens (not thousands). This check catches bugs that
         // make A(z) near-critically-stable.
-        assert!(peak < 100.0, "impulse response peak {peak} is unreasonably large");
+        assert!(
+            peak < 100.0,
+            "impulse response peak {peak} is unreasonably large"
+        );
     }
 
     #[test]
@@ -398,7 +395,10 @@ mod tests {
         let a = lsp_to_lpc(&lsp);
         // Check A(1) > 0.
         let a_at_1: f32 = (1..=LPC_ORDER).map(|k| a[k]).sum::<f32>() + 1.0;
-        assert!(a_at_1 > 0.0, "A(1) = {a_at_1} should be positive for stable A(z)");
+        assert!(
+            a_at_1 > 0.0,
+            "A(1) = {a_at_1} should be positive for stable A(z)"
+        );
         // Run an impulse through 1/A(z); energy must stay finite.
         let mut mem = [0.0f32; LPC_ORDER];
         let mut impulse = [0.0f32; SUBFRAME_SAMPLES];

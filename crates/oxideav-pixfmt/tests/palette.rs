@@ -79,7 +79,11 @@ fn generate_palette_stays_under_256() {
     let frame = deterministic_rgba(256, 256, 0xDEADBEEF);
     let opts = PaletteGenOptions::default();
     let palette = generate_palette(&[&frame], &opts).unwrap();
-    assert!(palette.colors.len() <= 256, "got {} colours", palette.colors.len());
+    assert!(
+        palette.colors.len() <= 256,
+        "got {} colours",
+        palette.colors.len()
+    );
     assert!(!palette.colors.is_empty());
 }
 

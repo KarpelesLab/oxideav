@@ -127,7 +127,12 @@ pub fn yuv444_to_rgb24(
     debug_assert!(dst.len() >= w * h * 3);
     for row in 0..h {
         for col in 0..w {
-            let (r, g, b) = yuv_to_rgb(yp[row * w + col], up[row * w + col], vp[row * w + col], matrix);
+            let (r, g, b) = yuv_to_rgb(
+                yp[row * w + col],
+                up[row * w + col],
+                vp[row * w + col],
+                matrix,
+            );
             let o = (row * w + col) * 3;
             dst[o] = r;
             dst[o + 1] = g;
@@ -151,7 +156,12 @@ pub fn yuv422_to_rgb24(
     for row in 0..h {
         for col in 0..w {
             let cc = col / 2;
-            let (r, g, b) = yuv_to_rgb(yp[row * w + col], up[row * cw + cc], vp[row * cw + cc], matrix);
+            let (r, g, b) = yuv_to_rgb(
+                yp[row * w + col],
+                up[row * cw + cc],
+                vp[row * cw + cc],
+                matrix,
+            );
             let o = (row * w + col) * 3;
             dst[o] = r;
             dst[o + 1] = g;
@@ -176,7 +186,12 @@ pub fn yuv420_to_rgb24(
         let cr = row / 2;
         for col in 0..w {
             let cc = col / 2;
-            let (r, g, b) = yuv_to_rgb(yp[row * w + col], up[cr * cw + cc], vp[cr * cw + cc], matrix);
+            let (r, g, b) = yuv_to_rgb(
+                yp[row * w + col],
+                up[cr * cw + cc],
+                vp[cr * cw + cc],
+                matrix,
+            );
             let o = (row * w + col) * 3;
             dst[o] = r;
             dst[o + 1] = g;

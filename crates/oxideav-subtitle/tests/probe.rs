@@ -22,9 +22,7 @@ fn webvtt_probes_top() {
 #[test]
 fn srt_probes_srt() {
     let reg = make_registry();
-    let mut c = Cursor::new(
-        b"1\n00:00:01,000 --> 00:00:02,000\nhi\n\n".to_vec(),
-    );
+    let mut c = Cursor::new(b"1\n00:00:01,000 --> 00:00:02,000\nhi\n\n".to_vec());
     let name = reg.probe_input(&mut c, Some("srt")).unwrap();
     assert_eq!(name, "srt");
 }
@@ -34,7 +32,9 @@ fn srt_probes_srt() {
 #[test]
 fn demuxer_yields_one_packet_per_cue() {
     let reg = make_registry();
-    let src = b"1\n00:00:01,000 --> 00:00:02,000\nfirst\n\n2\n00:00:03,000 --> 00:00:04,500\nsecond\n".to_vec();
+    let src =
+        b"1\n00:00:01,000 --> 00:00:02,000\nfirst\n\n2\n00:00:03,000 --> 00:00:04,500\nsecond\n"
+            .to_vec();
     let mut c = Cursor::new(src);
     let name = reg.probe_input(&mut c, Some("srt")).unwrap();
     let mut dmx = reg.open_demuxer(&name, Box::new(c)).unwrap();
@@ -55,7 +55,9 @@ fn mux_srt_reemits_cues() {
 
     let reg = make_registry();
     // Demux a source first.
-    let src = b"1\n00:00:01,000 --> 00:00:02,000\nfirst\n\n2\n00:00:03,000 --> 00:00:04,500\nsecond\n".to_vec();
+    let src =
+        b"1\n00:00:01,000 --> 00:00:02,000\nfirst\n\n2\n00:00:03,000 --> 00:00:04,500\nsecond\n"
+            .to_vec();
     let c = Cursor::new(src);
     let mut dmx = reg.open_demuxer("srt", Box::new(c)).unwrap();
     let stream = dmx.streams()[0].clone();
@@ -67,7 +69,9 @@ fn mux_srt_reemits_cues() {
 
     // Re-mux.
     let buf = Cursor::new(Vec::<u8>::new());
-    let mut mux = reg.open_muxer("srt", Box::new(buf), std::slice::from_ref(&stream)).unwrap();
+    let mut mux = reg
+        .open_muxer("srt", Box::new(buf), std::slice::from_ref(&stream))
+        .unwrap();
     mux.write_header().unwrap();
     for p in &packets {
         mux.write_packet(p).unwrap();

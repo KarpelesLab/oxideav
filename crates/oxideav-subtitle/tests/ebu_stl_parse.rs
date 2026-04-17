@@ -81,7 +81,12 @@ fn keeps_text_fields_intact() {
 #[test]
 fn gsi_metadata_preserved() {
     let t = ebu_stl::parse(&synthetic()).unwrap();
-    let get = |k: &str| t.metadata.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone());
+    let get = |k: &str| {
+        t.metadata
+            .iter()
+            .find(|(kk, _)| kk == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(get("dfc").as_deref(), Some("STL25.01"));
     assert_eq!(get("cpn").as_deref(), Some("850"));
     assert_eq!(get("mnc").as_deref(), Some("40"));
@@ -137,7 +142,10 @@ fn italic_wraps_in_tf_control_bytes() {
             saw_italic = true;
         }
     });
-    assert!(saw_italic, "italic control bytes should produce Segment::Italic");
+    assert!(
+        saw_italic,
+        "italic control bytes should produce Segment::Italic"
+    );
 }
 
 #[test]
@@ -151,10 +159,9 @@ fn visit<F: FnMut(&Segment)>(segs: &[Segment], f: &mut F) {
     for s in segs {
         f(s);
         match s {
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => visit(c, f),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                visit(c, f)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

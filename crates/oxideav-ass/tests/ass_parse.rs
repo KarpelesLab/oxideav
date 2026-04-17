@@ -27,8 +27,14 @@ Dialogue: 0,0:00:06.00,0:00:08.00,Default,,0,0,0,,{\i1}line one{\i0}\Nline two
 #[test]
 fn parses_script_info_and_styles() {
     let t = ass::parse(SAMPLE.as_bytes()).unwrap();
-    assert!(t.metadata.iter().any(|(k, v)| k == "title" && v == "Test Show"));
-    assert!(t.metadata.iter().any(|(k, v)| k == "playresx" && v == "384"));
+    assert!(t
+        .metadata
+        .iter()
+        .any(|(k, v)| k == "title" && v == "Test Show"));
+    assert!(t
+        .metadata
+        .iter()
+        .any(|(k, v)| k == "playresx" && v == "384"));
     let default = t.styles.iter().find(|s| s.name == "Default").unwrap();
     assert_eq!(default.font_size, Some(20.0));
     let caption = t.styles.iter().find(|s| s.name == "Caption").unwrap();
@@ -103,10 +109,9 @@ fn visit<F: FnMut(&Segment)>(segs: &[Segment], f: &mut F) {
     for s in segs {
         f(s);
         match s {
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => visit(c, f),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                visit(c, f)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

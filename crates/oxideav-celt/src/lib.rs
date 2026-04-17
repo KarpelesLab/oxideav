@@ -114,12 +114,7 @@ pub fn register(reg: &mut CodecRegistry) {
         .with_intra_only(false)
         .with_max_channels(2)
         .with_max_sample_rate(48_000);
-    reg.register_both(
-        CodecId::new(CODEC_ID_STR),
-        caps,
-        make_decoder,
-        make_encoder,
-    );
+    reg.register_both(CodecId::new(CODEC_ID_STR), caps, make_decoder, make_encoder);
 }
 
 fn make_decoder(_params: &CodecParameters) -> Result<Box<dyn Decoder>> {

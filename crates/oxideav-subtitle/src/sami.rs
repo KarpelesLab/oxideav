@@ -94,7 +94,10 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
             let next_start = syncs[idx + 1].1;
             // Walk back to the `<SYNC` itself.
             let slice = &text[..next_start];
-            let sync_idx = slice.to_ascii_lowercase().rfind("<sync").unwrap_or(slice.len());
+            let sync_idx = slice
+                .to_ascii_lowercase()
+                .rfind("<sync")
+                .unwrap_or(slice.len());
             sync_idx
         } else {
             text.len()
@@ -239,9 +242,8 @@ pub(crate) fn cue_to_bytes(cue: &SubtitleCue) -> Vec<u8> {
 pub(crate) fn bytes_to_cue(bytes: &[u8]) -> oxideav_core::Result<SubtitleCue> {
     let text = decode_utf8_lossy_stripping_bom(bytes);
     // Expect "<SYNC Start=...>\n<P ...>...</P>".
-    let start_ms = find_attr_u64(&text, "start").ok_or_else(|| {
-        oxideav_core::Error::invalid("SAMI cue: missing Start attribute")
-    })?;
+    let start_ms = find_attr_u64(&text, "start")
+        .ok_or_else(|| oxideav_core::Error::invalid("SAMI cue: missing Start attribute"))?;
     let inner = extract_p_content(&text).unwrap_or_default();
     let (class_name, segments) = parse_inline_sami(&inner);
     let start_us = start_ms as i64 * 1_000;
@@ -290,11 +292,7 @@ fn find_attr_u64(s: &str, name: &str) -> Option<u64> {
                     i += 1;
                 }
                 // Optional quote.
-                let quote = if i < lc.len() {
-                    lc.as_bytes()[i]
-                } else {
-                    0
-                };
+                let quote = if i < lc.len() { lc.as_bytes()[i] } else { 0 };
                 if quote == b'"' || quote == b'\'' {
                     i += 1;
                 }
@@ -511,12 +509,15 @@ impl<'a> TagSoup<'a> {
                         }
                         let col = extract_attr_val(inner, "color");
                         let face = extract_attr_val(inner, "face");
-                        let size = extract_attr_val(inner, "size")
-                            .and_then(|v| v.parse::<f32>().ok());
+                        let size =
+                            extract_attr_val(inner, "size").and_then(|v| v.parse::<f32>().ok());
                         self.pos = tag_end + 1;
                         let kids = self.parse_until(Some("font"));
                         if let Some(c) = col.as_deref().and_then(parse_color_rgb) {
-                            out.push(Segment::Color { rgb: c, children: kids });
+                            out.push(Segment::Color {
+                                rgb: c,
+                                children: kids,
+                            });
                         } else if face.is_some() || size.is_some() {
                             out.push(Segment::Font {
                                 family: face,
@@ -606,7 +607,9 @@ fn parse_sami_css(src: &str) -> Vec<SubtitleStyle> {
         let name_bytes = cleaned.as_bytes();
         let mut j = name_start;
         while j < name_bytes.len()
-            && (name_bytes[j].is_ascii_alphanumeric() || name_bytes[j] == b'_' || name_bytes[j] == b'-')
+            && (name_bytes[j].is_ascii_alphanumeric()
+                || name_bytes[j] == b'_'
+                || name_bytes[j] == b'-')
         {
             j += 1;
         }

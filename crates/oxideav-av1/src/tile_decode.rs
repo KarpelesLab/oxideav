@@ -75,7 +75,11 @@ pub struct TileDecoder<'a> {
 
 impl<'a> TileDecoder<'a> {
     /// Begin decoding a tile whose compressed payload is `tile_data`.
-    pub fn new(seq: &'a SequenceHeader, frame: &'a FrameHeader, tile_data: &'a [u8]) -> Result<Self> {
+    pub fn new(
+        seq: &'a SequenceHeader,
+        frame: &'a FrameHeader,
+        tile_data: &'a [u8],
+    ) -> Result<Self> {
         let symbol = SymbolDecoder::new(tile_data)?;
         let sb_size_log2 = if seq.use_128x128_superblock { 7 } else { 6 };
         Ok(Self {

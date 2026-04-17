@@ -569,7 +569,11 @@ fn parse_seconds_ts(s: &str) -> Option<i64> {
                 parts[1].parse::<i64>().ok()?,
                 parts[2].parse::<i64>().ok()?,
             ),
-            2 => (0i64, parts[0].parse::<i64>().ok()?, parts[1].parse::<i64>().ok()?),
+            2 => (
+                0i64,
+                parts[0].parse::<i64>().ok()?,
+                parts[1].parse::<i64>().ok()?,
+            ),
             _ => return None,
         };
         let base = (h * 3600 + m * 60 + sec) * 1_000_000;

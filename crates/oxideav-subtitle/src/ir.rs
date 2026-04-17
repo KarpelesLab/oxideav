@@ -64,10 +64,9 @@ fn append_plain(segments: &[Segment], out: &mut String) {
         match seg {
             Segment::Text(s) => out.push_str(s),
             Segment::LineBreak => out.push('\n'),
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => append_plain(c, out),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                append_plain(c, out)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

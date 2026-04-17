@@ -23,7 +23,7 @@
 //! The muxer writes raw S16LE bytes verbatim with no framing.
 
 use oxideav_container::{
-    ContainerRegistry, Demuxer, Muxer, PROBE_SCORE_EXTENSION, ProbeData, ReadSeek, WriteSeek,
+    ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek, PROBE_SCORE_EXTENSION,
 };
 use oxideav_core::{
     CodecId, CodecParameters, Error, MediaType, Packet, Result, SampleFormat, StreamInfo, TimeBase,

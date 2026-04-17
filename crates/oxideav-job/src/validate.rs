@@ -74,9 +74,8 @@ impl Job {
             TrackInput::Convert(c) => {
                 // Reject unknown pixel format names here so errors point at
                 // the track context rather than the opaque DAG builder.
-                parse_pixel_format(&c.convert).map_err(|e| {
-                    Error::invalid(format!("job: {ctx}: convert: {e}"))
-                })?;
+                parse_pixel_format(&c.convert)
+                    .map_err(|e| Error::invalid(format!("job: {ctx}: convert: {e}")))?;
                 self.check_refs_in_input(ctx, c.input.as_ref())
             }
         }
@@ -157,8 +156,7 @@ mod tests {
 
     #[test]
     fn rejects_dangling_alias() {
-        let j =
-            Job::from_json(r#"{"out.mkv": {"audio": [{"from": "@missing"}]}}"#).unwrap();
+        let j = Job::from_json(r#"{"out.mkv": {"audio": [{"from": "@missing"}]}}"#).unwrap();
         let e = j.validate().unwrap_err();
         let msg = format!("{e}");
         assert!(msg.contains("unresolved alias"), "got: {msg}");

@@ -149,16 +149,8 @@ pub fn write(track: &SubtitleTrack) -> Result<Vec<u8>> {
 
     // Count TTI rows we'll actually write.
     let tti_rows = track.cues.len() as u32;
-    write_ascii_fixed(
-        &mut gsi[238..243],
-        &format!("{:05}", tti_rows),
-        5,
-    );
-    write_ascii_fixed(
-        &mut gsi[243..248],
-        &format!("{:05}", track.cues.len()),
-        5,
-    );
+    write_ascii_fixed(&mut gsi[238..243], &format!("{:05}", tti_rows), 5);
+    write_ascii_fixed(&mut gsi[243..248], &format!("{:05}", track.cues.len()), 5);
     write_ascii_fixed(&mut gsi[248..250], &format!("{:02}", mnc), 2);
     write_ascii_fixed(&mut gsi[250..252], &format!("{:02}", mnr), 2);
     // TCS — "1" (TCS format = hh:mm:ss:ff).
@@ -188,7 +180,7 @@ pub fn write(track: &SubtitleTrack) -> Result<Vec<u8>> {
         tti[13] = (mnr as u8).saturating_sub(1); // VP — bottom-ish
         tti[14] = 0x02; // JC — centered
         tti[15] = 0; // CF
-        // Fill text field.
+                     // Fill text field.
         let encoded = encode_text_field(&cue.segments, &cpn);
         let copy_len = encoded.len().min(112);
         tti[16..16 + copy_len].copy_from_slice(&encoded[..copy_len]);
@@ -300,12 +292,7 @@ fn decode_text_field(tf: &[u8], _cpn: &str) -> Vec<Segment> {
     let mut stack_italic = false;
     let mut stack_underline = false;
 
-    fn flush(
-        buf: &mut String,
-        it: bool,
-        un: bool,
-        out: &mut Vec<Segment>,
-    ) {
+    fn flush(buf: &mut String, it: bool, un: bool, out: &mut Vec<Segment>) {
         if buf.is_empty() {
             return;
         }

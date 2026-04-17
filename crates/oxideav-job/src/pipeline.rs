@@ -221,7 +221,15 @@ pub(crate) fn run_pipelined(
             let out_tx = out_tx.clone();
             let name = format!("encode-{track_idx}");
             handles.push(spawn_stage(abort_e, name, move |abort| {
-                run_encode_stage(enc, upstream, out_tx, track_idx as u32, kind, abort, counters_e)
+                run_encode_stage(
+                    enc,
+                    upstream,
+                    out_tx,
+                    track_idx as u32,
+                    kind,
+                    abort,
+                    counters_e,
+                )
             }));
         } else {
             // No encoder — raw frames flow into the mux (player scenario).

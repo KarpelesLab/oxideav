@@ -56,8 +56,8 @@ const fn synth_lspcb1_row(i: usize) -> [i16; M] {
     let base_lo: i32 = 1500;
     let base_hi: i32 = 25500;
     let span = base_hi - base_lo; // 24000
-    // Per-row perturbation: a gentle dither derived from `i` that
-    // never threatens monotonicity (max ±200 Q13 per component).
+                                  // Per-row perturbation: a gentle dither derived from `i` that
+                                  // never threatens monotonicity (max ±200 Q13 per component).
     let mut row = [0i16; M];
     let mut k = 0;
     while k < M {

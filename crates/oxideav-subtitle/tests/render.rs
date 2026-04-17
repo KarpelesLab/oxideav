@@ -3,9 +3,7 @@
 use std::collections::VecDeque;
 
 use oxideav_codec::Decoder;
-use oxideav_core::{
-    CodecId, Error, Frame, Packet, PixelFormat, Result, Segment, SubtitleCue,
-};
+use oxideav_core::{CodecId, Error, Frame, Packet, PixelFormat, Result, Segment, SubtitleCue};
 use oxideav_subtitle::{make_rendered_decoder, Compositor, RenderedSubtitleDecoder};
 
 fn mkcue(segs: Vec<Segment>) -> SubtitleCue {
@@ -248,4 +246,3 @@ fn make_rendered_decoder_factory() {
     let mut wrapper = make_rendered_decoder(inner, 64, 64);
     assert!(matches!(wrapper.receive_frame(), Ok(Frame::Video(_))));
 }
-

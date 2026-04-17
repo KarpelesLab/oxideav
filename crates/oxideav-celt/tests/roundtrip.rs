@@ -14,8 +14,8 @@ use oxideav_celt::quant_bands::{
 use oxideav_celt::range_decoder::{RangeDecoder, BITRES};
 use oxideav_celt::rate::clt_compute_allocation;
 use oxideav_celt::tables::{
-    init_caps, lm_for_frame_samples, EBAND_5MS, NB_EBANDS, SPREAD_ICDF, SPREAD_NORMAL, TRIM_ICDF,
-    TF_SELECT_TABLE,
+    init_caps, lm_for_frame_samples, EBAND_5MS, NB_EBANDS, SPREAD_ICDF, SPREAD_NORMAL,
+    TF_SELECT_TABLE, TRIM_ICDF,
 };
 use oxideav_codec::Encoder;
 use oxideav_core::{AudioFrame, CodecId, CodecParameters, Frame, Packet, SampleFormat, TimeBase};
@@ -75,14 +75,24 @@ fn decode_celt_frame(
     let n = (m * EBAND_5MS[NB_EBANDS] as i32) as usize;
 
     unquant_coarse_energy(
-        &mut rc, old_band_e, start_band, end_band, header.intra, 1, lm as usize,
+        &mut rc,
+        old_band_e,
+        start_band,
+        end_band,
+        header.intra,
+        1,
+        lm as usize,
     );
 
     // tf_decode (mirror of the encoder's emitting zeros).
     let budget = (rc.storage() * 8) as u32;
     let mut tell_u = rc.tell() as u32;
     let mut logp = 4u32;
-    let tf_select_rsv = if lm > 0 && tell_u + logp + 1 <= budget { 1 } else { 0 };
+    let tf_select_rsv = if lm > 0 && tell_u + logp + 1 <= budget {
+        1
+    } else {
+        0
+    };
     let budget_after = budget - tf_select_rsv;
     let mut tf_res = vec![0i32; NB_EBANDS];
     let mut tf_changed = 0i32;
@@ -183,15 +193,38 @@ fn decode_celt_frame(
     let mut rng_local = *rng;
     let band_e_snapshot = old_band_e.clone();
     quant_all_bands(
-        start_band, end_band, &mut x_buf, None, &mut collapse_masks,
-        &band_e_snapshot, &pulses, false, spread, dual_stereo, intensity,
-        &tf_res, total_pvq_bits, balance, &mut rc, lm, coded_bands, &mut rng_local, false,
+        start_band,
+        end_band,
+        &mut x_buf,
+        None,
+        &mut collapse_masks,
+        &band_e_snapshot,
+        &pulses,
+        false,
+        spread,
+        dual_stereo,
+        intensity,
+        &tf_res,
+        total_pvq_bits,
+        balance,
+        &mut rc,
+        lm,
+        coded_bands,
+        &mut rng_local,
+        false,
     );
     *rng = rng_local;
 
     let bits_left = (bytes.len() as i32) * 8 - rc.tell();
     unquant_energy_finalise(
-        &mut rc, old_band_e, start_band, end_band, &fine_quant, &fine_priority, bits_left, 1,
+        &mut rc,
+        old_band_e,
+        start_band,
+        end_band,
+        &fine_quant,
+        &fine_priority,
+        bits_left,
+        1,
     );
 
     // Denormalise.
@@ -287,7 +320,11 @@ fn decode_packets(packets: &[Packet], expected_samples: usize) -> Vec<f32> {
 /// SNR in dB between two equal-length signals.
 fn psnr_db(x: &[f32], y: &[f32]) -> f32 {
     let n = x.len().min(y.len());
-    let signal_power: f64 = x[..n].iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>() / n as f64;
+    let signal_power: f64 = x[..n]
+        .iter()
+        .map(|v| (*v as f64) * (*v as f64))
+        .sum::<f64>()
+        / n as f64;
     let noise_power: f64 = x[..n]
         .iter()
         .zip(y[..n].iter())
@@ -325,7 +362,10 @@ fn sine_roundtrip_produces_audible_output() {
 
     // Sanity: decoder produces nonzero output.
     let dec_energy: f32 = dec_slice.iter().map(|v| v * v).sum::<f32>() / FRAME_SAMPLES as f32;
-    assert!(dec_energy > 1e-6, "decoder produced silent output (energy {dec_energy})");
+    assert!(
+        dec_energy > 1e-6,
+        "decoder produced silent output (energy {dec_energy})"
+    );
 
     // Goertzel at 1 kHz: check that the target tone dominates the decoder output.
     let goertzel = |samples: &[f32], f: f32| -> f32 {

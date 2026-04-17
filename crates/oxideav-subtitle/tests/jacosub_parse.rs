@@ -52,7 +52,10 @@ fn write_roundtrips() {
     let t = jacosub::parse(SAMPLE.as_bytes()).unwrap();
     let out = jacosub::write(&t).unwrap();
     let s = String::from_utf8(out).unwrap();
-    assert!(s.contains("@0:00:01.00 0:00:03.00 D hello world"), "got: {s}");
+    assert!(
+        s.contains("@0:00:01.00 0:00:03.00 D hello world"),
+        "got: {s}"
+    );
     // Headers come from the captured extradata.
     assert!(s.contains("#TITLE Demo show"));
     // Reparse yields the same cue count + timings.
@@ -71,17 +74,19 @@ fn probe_positive() {
 
 #[test]
 fn probe_rejects_webvtt() {
-    assert_eq!(jacosub::probe(b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n"), 0);
+    assert_eq!(
+        jacosub::probe(b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi\n"),
+        0
+    );
 }
 
 fn visit<F: FnMut(&Segment)>(segs: &[Segment], f: &mut F) {
     for s in segs {
         f(s);
         match s {
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => visit(c, f),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                visit(c, f)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

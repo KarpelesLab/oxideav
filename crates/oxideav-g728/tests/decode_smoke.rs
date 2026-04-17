@@ -179,8 +179,8 @@ fn decoder_handles_multiple_packets_in_sequence() {
     let bytes = pack_indices(&indices);
     let mut saw_nonzero = false;
     for i in 0..5 {
-        let pkt = Packet::new(0, TimeBase::new(1, SAMPLE_RATE as i64), bytes.clone())
-            .with_pts(i * 160);
+        let pkt =
+            Packet::new(0, TimeBase::new(1, SAMPLE_RATE as i64), bytes.clone()).with_pts(i * 160);
         dec.send_packet(&pkt).expect("send_packet");
         let Frame::Audio(a) = dec.receive_frame().expect("receive_frame") else {
             panic!("expected audio");
@@ -195,5 +195,8 @@ fn decoder_handles_multiple_packets_in_sequence() {
             }
         }
     }
-    assert!(saw_nonzero, "multi-packet decode produced no non-zero samples");
+    assert!(
+        saw_nonzero,
+        "multi-packet decode produced no non-zero samples"
+    );
 }

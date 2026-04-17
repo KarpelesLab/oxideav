@@ -116,9 +116,7 @@ impl CeltEncoder {
         }
         let sr = params.sample_rate.unwrap_or(SAMPLE_RATE);
         if sr != SAMPLE_RATE {
-            return Err(Error::unsupported(
-                "CELT encoder: only 48 kHz is supported",
-            ));
+            return Err(Error::unsupported("CELT encoder: only 48 kHz is supported"));
         }
         let mut out_params = params.clone();
         out_params.channels = Some(1);

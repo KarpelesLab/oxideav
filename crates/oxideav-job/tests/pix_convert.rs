@@ -58,7 +58,9 @@ fn explicit_convert_node_parses() {
     };
     assert_eq!(mux_tracks.len(), 1);
     let enc_upstream = match dag.node(mux_tracks[0].upstream) {
-        DagNode::Encode { upstream, codec, .. } => {
+        DagNode::Encode {
+            upstream, codec, ..
+        } => {
             assert_eq!(codec, "h264");
             *upstream
         }
@@ -143,8 +145,7 @@ fn auto_insert_registers_accepted_pixel_formats() {
     // accepted pixel format, and confirm the information is visible
     // on the registered CodecImplementation.
     let mut reg = CodecRegistry::new();
-    let caps = CodecCapabilities::video("fake_vid_sw")
-        .with_pixel_format(PixelFormat::Yuv420P);
+    let caps = CodecCapabilities::video("fake_vid_sw").with_pixel_format(PixelFormat::Yuv420P);
     reg.register_encoder_impl(CodecId::new("fake_vid"), caps, make_encoder);
     let _ = make_decoder; // silence unused-fn warning
 

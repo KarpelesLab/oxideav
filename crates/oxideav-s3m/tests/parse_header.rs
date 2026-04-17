@@ -580,10 +580,7 @@ fn effect_sdx_delays_trigger() {
     // next rows are empty so the note keeps sounding since the sample
     // loops).
     let post = &frames[3 * spt..4 * spt];
-    let post_nz = post
-        .iter()
-        .filter(|(l, r)| *l != 0 || *r != 0)
-        .count();
+    let post_nz = post.iter().filter(|(l, r)| *l != 0 || *r != 0).count();
     assert!(
         post_nz > post.len() / 4,
         "expected audible output after delay; got {post_nz}/{} non-zero",
@@ -747,9 +744,9 @@ fn build_stereo_pan_module() -> Vec<u8> {
     //        either way the right pan wins). We keep row 1 minimal.
     let mut pat_body: Vec<u8> = vec![
         0xA0, 0x50, 1, 19, 0x80, // row 0: note + S80
-        0x00,                    // row 0 terminator
+        0x00, // row 0 terminator
         0xA0, 0x50, 1, 19, 0x8F, // row 1: note + S8F
-        0x00,                    // row 1 terminator
+        0x00, // row 1 terminator
     ];
     pat_body.resize(pat_body.len() + 128, 0);
     let total_len = (2 + pat_body.len()) as u16;

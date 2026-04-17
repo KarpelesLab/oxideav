@@ -80,9 +80,7 @@ fn mp3_metadata_and_pictures_flow_through() {
     oxideav_mp3::register_containers(&mut reg);
 
     let cursor: Box<dyn oxideav_container::ReadSeek> = Box::new(Cursor::new(file));
-    let demuxer = reg
-        .open_demuxer("mp3", cursor)
-        .expect("open mp3 demuxer");
+    let demuxer = reg.open_demuxer("mp3", cursor).expect("open mp3 demuxer");
 
     let md = demuxer.metadata();
     assert!(

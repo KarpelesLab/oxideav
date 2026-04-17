@@ -86,10 +86,7 @@ pub fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
 
 /// Build an encoder with an explicit qindex. Useful for tests and for
 /// callers that want finer control than the default quality.
-pub fn make_encoder_with_qindex(
-    params: &CodecParameters,
-    qindex: u8,
-) -> Result<Box<dyn Encoder>> {
+pub fn make_encoder_with_qindex(params: &CodecParameters, qindex: u8) -> Result<Box<dyn Encoder>> {
     let width = params
         .width
         .ok_or_else(|| Error::invalid("vp8 encoder: missing width"))?;
@@ -192,12 +189,7 @@ impl Encoder for Vp8Encoder {
 // ---------------------------------------------------------------------------
 
 /// Encode one keyframe. Returns the raw VP8 bitstream for the frame.
-pub fn encode_keyframe(
-    width: u32,
-    height: u32,
-    qindex: u8,
-    frame: &VideoFrame,
-) -> Result<Vec<u8>> {
+pub fn encode_keyframe(width: u32, height: u32, qindex: u8, frame: &VideoFrame) -> Result<Vec<u8>> {
     let mb_w = ((width + 15) / 16) as usize;
     let mb_h = ((height + 15) / 16) as usize;
     let y_stride = mb_w * 16;
@@ -279,9 +271,8 @@ pub fn encode_keyframe(
             hdr_enc.write_bool(142, false);
 
             let mb_rec = encode_intra_mb_dc(
-                &src_y, &src_u, &src_v, &mut rec_y, &mut rec_u, &mut rec_v,
-                y_stride, uv_stride, y_buf_h, uv_buf_h,
-                mb_x, mb_y, mb_w, mb_h, &q,
+                &src_y, &src_u, &src_v, &mut rec_y, &mut rec_u, &mut rec_v, y_stride, uv_stride,
+                y_buf_h, uv_buf_h, mb_x, mb_y, mb_w, mb_h, &q,
             );
             mb_encoded.push(mb_rec);
         }
@@ -843,7 +834,14 @@ mod tests {
 
     fn roundtrip_one_block(coeffs: &[i16; 16], plane: usize, nctx: u8, start: usize) {
         let mut enc = BoolEncoder::new();
-        let _nz_enc = encode_block(&mut enc, &DEFAULT_COEF_PROBS, plane, nctx as usize, coeffs, start);
+        let _nz_enc = encode_block(
+            &mut enc,
+            &DEFAULT_COEF_PROBS,
+            plane,
+            nctx as usize,
+            coeffs,
+            start,
+        );
         let buf = enc.finish();
         let mut dec = BoolDecoder::new(&buf).unwrap();
         let bt = match plane {
@@ -889,7 +887,7 @@ mod tests {
         let mut coeffs = [0i16; 16];
         coeffs[0] = 1;
         coeffs[1] = 2;
-        coeffs[4] = 3;  // zigzag index 2 → (1,0); etc.
+        coeffs[4] = 3; // zigzag index 2 → (1,0); etc.
         coeffs[8] = -1;
         roundtrip_one_block(&coeffs, 0, 0, 1);
     }
@@ -927,7 +925,14 @@ mod tests {
             for bx in 0..4 {
                 let idx = by * 4 + bx;
                 let nctx = nz_above[bx] + nz_left[by];
-                let nz = encode_block(&mut enc, &DEFAULT_COEF_PROBS, 0, nctx as usize, &y_blks[idx], 1);
+                let nz = encode_block(
+                    &mut enc,
+                    &DEFAULT_COEF_PROBS,
+                    0,
+                    nctx as usize,
+                    &y_blks[idx],
+                    1,
+                );
                 let nzf = if nz > 0 { 1 } else { 0 };
                 nz_above[bx] = nzf;
                 nz_left[by] = nzf;
@@ -942,7 +947,14 @@ mod tests {
                 let idx = by * 4 + bx;
                 let nctx = nz_above[bx] + nz_left[by];
                 let mut out = [0i16; 16];
-                let nz = decode_block(&mut dec, &DEFAULT_COEF_PROBS, BlockType::YAfterY2, nctx, &mut out, 1);
+                let nz = decode_block(
+                    &mut dec,
+                    &DEFAULT_COEF_PROBS,
+                    BlockType::YAfterY2,
+                    nctx,
+                    &mut out,
+                    1,
+                );
                 let nzf = if nz > 0 { 1 } else { 0 };
                 nz_above[bx] = nzf;
                 nz_left[by] = nzf;
@@ -977,12 +989,12 @@ mod tests {
     fn block_roundtrip_category_magnitudes() {
         let mut coeffs = [0i16; 16];
         // Put values of varying category in a variety of zigzag positions.
-        coeffs[0] = 6;    // cat ~ in-range of decoder path >=5
-        coeffs[1] = 9;    // category within the 7..=10 range
-        coeffs[2] = 15;   // CAT3
-        coeffs[3] = 25;   // CAT4
-        coeffs[4] = -50;  // CAT5
-        coeffs[5] = 100;  // CAT6
+        coeffs[0] = 6; // cat ~ in-range of decoder path >=5
+        coeffs[1] = 9; // category within the 7..=10 range
+        coeffs[2] = 15; // CAT3
+        coeffs[3] = 25; // CAT4
+        coeffs[4] = -50; // CAT5
+        coeffs[5] = 100; // CAT6
         roundtrip_one_block(&coeffs, 1, 0, 0);
     }
 }

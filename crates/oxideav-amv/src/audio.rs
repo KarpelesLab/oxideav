@@ -220,8 +220,7 @@ impl ImaState {
             predictor += diff;
         }
         self.predictor = predictor.clamp(i16::MIN as i32, i16::MAX as i32);
-        self.step_index =
-            (self.step_index + INDEX_TABLE[nibble as usize & 0x0F]).clamp(0, 88);
+        self.step_index = (self.step_index + INDEX_TABLE[nibble as usize & 0x0F]).clamp(0, 88);
         nibble & 0x0F
     }
 }

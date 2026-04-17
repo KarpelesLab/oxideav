@@ -150,9 +150,7 @@ pub fn encode_vp8l_argb(
                 alpha_freq[a as usize] += 1;
             }
             StreamSym::Backref {
-                len_sym,
-                dist_sym,
-                ..
+                len_sym, dist_sym, ..
             } => {
                 green_freq[256 + len_sym as usize] += 1;
                 dist_freq[dist_sym as usize] += 1;
@@ -315,8 +313,7 @@ fn build_symbol_stream(pixels: &[u32]) -> Vec<StreamSym> {
             // value = best_dist. Distances use `code = d + 120` form so
             // we never touch the short-distance plane table.
             let (len_sym, len_eb, len_ex) = encode_len_or_dist_value(best_len as u32);
-            let (dist_sym, dist_eb, dist_ex) =
-                encode_len_or_dist_value((best_dist as u32) + 120);
+            let (dist_sym, dist_eb, dist_ex) = encode_len_or_dist_value((best_dist as u32) + 120);
             out.push(StreamSym::Backref {
                 len_sym,
                 len_extra_bits: len_eb,

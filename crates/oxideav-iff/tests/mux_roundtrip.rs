@@ -16,7 +16,7 @@ use oxideav_iff::svx::SvxMuxer;
 fn sawtooth_200ms_8khz() -> Vec<u8> {
     let sr = 8000u32;
     let total = (sr as u64 * 200 / 1000) as usize; // 1600
-    // Sawtooth: ramp -128..127 and wrap. Written as u8-encoded i8 bytes.
+                                                   // Sawtooth: ramp -128..127 and wrap. Written as u8-encoded i8 bytes.
     (0..total)
         .map(|i| ((i as i32 * 5 - 128).rem_euclid(256) - 128) as i8 as u8)
         .collect()
@@ -133,7 +133,8 @@ fn mux_roundtrip_with_name_chunk() {
     {
         let f = std::fs::File::create(&path).unwrap();
         let ws: Box<dyn WriteSeek> = Box::new(f);
-        let mut mux = SvxMuxer::with_metadata(ws, std::slice::from_ref(&stream), &metadata).unwrap();
+        let mut mux =
+            SvxMuxer::with_metadata(ws, std::slice::from_ref(&stream), &metadata).unwrap();
         mux.write_header().unwrap();
         mux.write_packet(&Packet::new(0, stream.time_base, payload.clone()))
             .unwrap();
@@ -143,8 +144,14 @@ fn mux_roundtrip_with_name_chunk() {
     let _ = std::fs::remove_file(&path);
 
     // The NAME chunk must appear between VHDR and BODY.
-    let name_pos = bytes.windows(4).position(|w| w == b"NAME").expect("NAME chunk");
-    let body_pos = bytes.windows(4).position(|w| w == b"BODY").expect("BODY chunk");
+    let name_pos = bytes
+        .windows(4)
+        .position(|w| w == b"NAME")
+        .expect("NAME chunk");
+    let body_pos = bytes
+        .windows(4)
+        .position(|w| w == b"BODY")
+        .expect("BODY chunk");
     assert!(name_pos < body_pos, "NAME must precede BODY");
 
     let reg = registry();

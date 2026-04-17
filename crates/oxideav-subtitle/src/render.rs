@@ -92,11 +92,7 @@ impl Decoder for RenderedSubtitleDecoder {
 
 /// Factory: wrap an existing subtitle decoder in a RenderedSubtitleDecoder
 /// at the given output resolution.
-pub fn make_rendered_decoder(
-    inner: Box<dyn Decoder>,
-    width: u32,
-    height: u32,
-) -> Box<dyn Decoder> {
+pub fn make_rendered_decoder(inner: Box<dyn Decoder>, width: u32, height: u32) -> Box<dyn Decoder> {
     Box::new(RenderedSubtitleDecoder::new(inner, width, height))
 }
 

@@ -9,9 +9,7 @@
 // `send_packet` etc. on the `Box<dyn _>` returned by the factories.
 #[allow(unused_imports)]
 use oxideav_codec::{Decoder, Encoder};
-use oxideav_core::{
-    AudioFrame, CodecId, CodecParameters, Frame, SampleFormat, TimeBase,
-};
+use oxideav_core::{AudioFrame, CodecId, CodecParameters, Frame, SampleFormat, TimeBase};
 use oxideav_g722::{decoder, encoder, CODEC_ID_STR};
 
 fn params() -> CodecParameters {

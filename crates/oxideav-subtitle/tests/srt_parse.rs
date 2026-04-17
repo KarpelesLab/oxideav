@@ -75,7 +75,10 @@ fn write_roundtrips_tags() {
     assert!(out_str.contains("<b>Hello</b>"));
     assert!(out_str.contains("<i>world</i>"));
     // Indexes renumbered starting at 1.
-    assert!(out_str.starts_with("1\n"), "want leading `1\\n`, got: {out_str}");
+    assert!(
+        out_str.starts_with("1\n"),
+        "want leading `1\\n`, got: {out_str}"
+    );
     assert!(out_str.contains("\n2\n"));
     assert!(out_str.contains("\n3\n"));
 
@@ -100,10 +103,9 @@ fn visit<F: FnMut(&Segment)>(segs: &[Segment], f: &mut F) {
     for s in segs {
         f(s);
         match s {
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => visit(c, f),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                visit(c, f)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

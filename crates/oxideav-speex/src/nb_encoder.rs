@@ -186,8 +186,7 @@ impl NbEncoder {
             // structure but keeps the encoder unconditionally robust.
             let mut fallback = [0.0f32; NB_ORDER];
             for i in 0..NB_ORDER {
-                fallback[i] =
-                    std::f32::consts::PI * (i as f32 + 1.0) / (NB_ORDER as f32 + 1.0);
+                fallback[i] = std::f32::consts::PI * (i as f32 + 1.0) / (NB_ORDER as f32 + 1.0);
             }
             fallback
         });
@@ -387,8 +386,7 @@ impl NbEncoder {
             // Update the simulated synthesis-filter state so the next
             // sub-frame's ZIR reflects what the decoder's `mem_sp`
             // will actually hold.
-            let exc_slice: Vec<f32> =
-                self.exc_buf[exc_idx..exc_idx + NB_SUBFRAME_SIZE].to_vec();
+            let exc_slice: Vec<f32> = self.exc_buf[exc_idx..exc_idx + NB_SUBFRAME_SIZE].to_vec();
             let mut sink = [0.0f32; NB_SUBFRAME_SIZE];
             crate::nb_decoder::iir_mem16(
                 &exc_slice,
@@ -400,7 +398,6 @@ impl NbEncoder {
             );
             let _ = residual; // referenced elsewhere — kept for consistency
         }
-
 
         // ---- 9. Save state for next frame ----------------------------
         self.old_qlsp = qlsp;
@@ -615,9 +612,7 @@ fn lpc_to_lsp(ak: &[f32; NB_ORDER]) -> Option<[f32; NB_ORDER]> {
         // short of ω=π to avoid the same for P. The boundary zeros are
         // not LSPs.
         let eps = 1.0 / (grid as f32 * 2.0);
-        let clamp_omega = |o: f32| {
-            o.clamp(eps, std::f32::consts::PI - eps)
-        };
+        let clamp_omega = |o: f32| o.clamp(eps, std::f32::consts::PI - eps);
         let mut prev_o = clamp_omega(to_omega(1));
         let mut prev_f = eval(coeffs, prev_o);
         for i in 2..grid {
@@ -701,8 +696,7 @@ fn quantise_lsp_nb(lsp: &[f32; NB_ORDER]) -> ([f32; NB_ORDER], [usize; 5]) {
     //          with scale 1/256.
     let mut residual = [0.0f32; NB_ORDER];
     for i in 0..NB_ORDER {
-        residual[i] =
-            lsp[i] - std::f32::consts::PI * (i as f32 + 1.0) / (NB_ORDER as f32 + 1.0);
+        residual[i] = lsp[i] - std::f32::consts::PI * (i as f32 + 1.0) / (NB_ORDER as f32 + 1.0);
     }
     // Decoder: lsp[i] = linear[i] + CDBK_NB[id*10+i]/256
     // So target for stage 1 = residual * 256, search over 64 entries.
@@ -1134,8 +1128,7 @@ mod tests {
         let mut pcm = [0.0f32; NB_FRAME_SIZE];
         for i in 0..NB_FRAME_SIZE {
             let t = i as f32;
-            pcm[i] = 5000.0
-                * ((t * 0.2).sin() + 0.5 * (t * 0.05).sin() + 0.3 * (t * 0.7).cos());
+            pcm[i] = 5000.0 * ((t * 0.2).sin() + 0.5 * (t * 0.05).sin() + 0.3 * (t * 0.7).cos());
         }
         enc.encode_frame(&pcm, &mut bw).unwrap();
         assert_eq!(bw.bit_position(), 300, "mode 5 must emit exactly 300 bits");

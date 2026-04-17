@@ -16,9 +16,7 @@
 use std::io::{Read, SeekFrom, Write};
 
 use oxideav_codec::Decoder;
-use oxideav_container::{
-    ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek,
-};
+use oxideav_container::{ContainerRegistry, Demuxer, Muxer, ProbeData, ReadSeek, WriteSeek};
 use oxideav_core::{
     CodecId, CodecParameters, Error, MediaType, Packet, PixelFormat, Result, StreamInfo, TimeBase,
 };
@@ -44,7 +42,12 @@ pub fn register_codecs(reg: &mut oxideav_codec::CodecRegistry) {
             PixelFormat::Rgb48Le,
             PixelFormat::Rgba64Le,
         ]);
-    reg.register_both(cid, caps, crate::decoder::make_decoder, crate::encoder::make_encoder);
+    reg.register_both(
+        cid,
+        caps,
+        crate::decoder::make_decoder,
+        crate::encoder::make_encoder,
+    );
 }
 
 pub fn register_containers(reg: &mut ContainerRegistry) {
@@ -243,8 +246,7 @@ fn build_apng_packets(
         }
     }
     if let Some(fctl) = pending_fctl.take() {
-        let pkt =
-            build_still_png_packet(ihdr, plte, trns, &pending_data, time_base, pts, &fctl)?;
+        let pkt = build_still_png_packet(ihdr, plte, trns, &pending_data, time_base, pts, &fctl)?;
         let delay = fctl.delay_centiseconds().max(1) as i64;
         let mut p = pkt;
         p.duration = Some(delay);

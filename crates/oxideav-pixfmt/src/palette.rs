@@ -68,7 +68,9 @@ pub fn generate_palette(frames: &[&VideoFrame], opts: &PaletteGenOptions) -> Res
         PaletteStrategy::MedianCut => median_cut(&pixels, max),
         PaletteStrategy::Uniform => uniform_palette(max),
         PaletteStrategy::Octree => {
-            return Err(Error::unsupported("palette: octree strategy not implemented"))
+            return Err(Error::unsupported(
+                "palette: octree strategy not implemented",
+            ))
         }
     };
 
@@ -166,9 +168,7 @@ struct Box3 {
 
 impl Box3 {
     fn from(p: &[[u8; 4]]) -> Self {
-        Self {
-            colors: p.to_vec(),
-        }
+        Self { colors: p.to_vec() }
     }
 
     fn max_range(&self) -> i32 {

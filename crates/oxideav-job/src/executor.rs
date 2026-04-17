@@ -205,7 +205,8 @@ impl<'a> Executor<'a> {
         // Main pump. Read packets from every demuxer in round-robin until
         // all are EOF. Route each packet to every pipeline that consumes it.
         let mut stats = ExecutorStats::default();
-        let mut eof: HashMap<String, bool> = dmx_by_uri.keys().map(|k| (k.clone(), false)).collect();
+        let mut eof: HashMap<String, bool> =
+            dmx_by_uri.keys().map(|k| (k.clone(), false)).collect();
         let uris: Vec<String> = dmx_by_uri.keys().cloned().collect();
         while eof.values().any(|e| !e) {
             for uri in &uris {
@@ -241,11 +242,7 @@ impl<'a> Executor<'a> {
         Ok(stats)
     }
 
-    pub(crate) fn build_track_runtime(
-        &self,
-        dag: &Dag,
-        track: &MuxTrack,
-    ) -> Result<TrackRuntime> {
+    pub(crate) fn build_track_runtime(&self, dag: &Dag, track: &MuxTrack) -> Result<TrackRuntime> {
         // Walk upstream chain, accumulating stages in reverse (top-down).
         // The chain ends at a Demuxer (leaf). The pixel-format
         // auto-insert pass runs later, once the demuxer is open and
@@ -258,18 +255,16 @@ impl<'a> Executor<'a> {
                 DagNode::Demuxer { source } => {
                     break (source.clone(), ResolvedSelector::any());
                 }
-                DagNode::Select { upstream, selector } => {
-                    match dag.node(*upstream) {
-                        DagNode::Demuxer { source } => {
-                            break (source.clone(), selector.clone());
-                        }
-                        _ => {
-                            return Err(Error::other(
-                                "job: nested Select above non-Demuxer is not yet supported",
-                            ));
-                        }
+                DagNode::Select { upstream, selector } => match dag.node(*upstream) {
+                    DagNode::Demuxer { source } => {
+                        break (source.clone(), selector.clone());
                     }
-                }
+                    _ => {
+                        return Err(Error::other(
+                            "job: nested Select above non-Demuxer is not yet supported",
+                        ));
+                    }
+                },
                 DagNode::Decode { upstream } => {
                     stages.push(StageSpec::Decode);
                     cur = *upstream;
@@ -311,11 +306,7 @@ impl<'a> Executor<'a> {
         };
         stages.reverse();
         Ok(TrackRuntime::new(
-            source_uri,
-            selector,
-            track.kind,
-            track.copy,
-            stages,
+            source_uri, selector, track.kind, track.copy, stages,
         ))
     }
 
@@ -627,9 +618,7 @@ impl TrackRuntime {
                 }
                 StageSpec::Encode { codec, .. } => {
                     if let Some(cur_fmt) = running {
-                        if let Some(accepted) =
-                            codec_accepted_pixel_formats(codecs, codec)
-                        {
+                        if let Some(accepted) = codec_accepted_pixel_formats(codecs, codec) {
                             if !accepted.contains(&cur_fmt) {
                                 let target = accepted[0];
                                 rewritten.push(StageSpec::Convert { target });

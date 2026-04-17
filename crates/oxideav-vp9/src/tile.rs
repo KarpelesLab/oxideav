@@ -182,12 +182,7 @@ pub fn decode_partition(
 }
 
 /// Decode one block per §6.4.3 — stub.
-pub fn decode_block(
-    _bd: &mut BoolDecoder<'_>,
-    _row: u32,
-    _col: u32,
-    _bsize: u32,
-) -> Result<()> {
+pub fn decode_block(_bd: &mut BoolDecoder<'_>, _row: u32, _col: u32, _bsize: u32) -> Result<()> {
     Err(Error::unsupported(
         "vp9 §6.4.3 decode_block: block decode (residual + prediction + \
          reconstruction) not implemented",
@@ -272,10 +267,7 @@ mod tests {
         match decode_tiles(&payload, &h, &ch) {
             Err(Error::Unsupported(s)) => {
                 assert!(s.contains("§6.4.3"), "msg should cite §6.4.3: {s}");
-                assert!(
-                    s.contains("partition"),
-                    "msg should mention partition: {s}"
-                );
+                assert!(s.contains("partition"), "msg should mention partition: {s}");
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }

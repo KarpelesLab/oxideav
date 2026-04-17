@@ -40,10 +40,7 @@ fn bad_chunk_crc_is_rejected() {
     let err =
         oxideav_png::decoder::decode_png_to_frame(&bytes, None, TimeBase::new(1, 100)).unwrap_err();
     match err {
-        Error::InvalidData(msg) => assert!(
-            msg.contains("CRC"),
-            "expected CRC error, got: {msg}"
-        ),
+        Error::InvalidData(msg) => assert!(msg.contains("CRC"), "expected CRC error, got: {msg}"),
         other => panic!("expected InvalidData, got: {other:?}"),
     }
 }

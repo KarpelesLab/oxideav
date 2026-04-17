@@ -57,11 +57,7 @@ fn synth_rgb24(w: u32, h: u32) -> VideoFrame {
 fn rgb_family_4byte_roundtrips() {
     let opts = ConvertOptions::default();
     let src = synth_rgba(32, 16);
-    for fmt in [
-        PixelFormat::Bgra,
-        PixelFormat::Argb,
-        PixelFormat::Abgr,
-    ] {
+    for fmt in [PixelFormat::Bgra, PixelFormat::Argb, PixelFormat::Abgr] {
         let stage = convert(&src, fmt, &opts).expect("swizzle");
         let back = convert(&stage, PixelFormat::Rgba, &opts).expect("swizzle back");
         assert_eq!(back.planes[0].data, src.planes[0].data, "roundtrip {fmt:?}");

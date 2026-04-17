@@ -139,11 +139,7 @@ impl Ihdr {
             3 => 1, // palette index
             4 => 2, // gray + alpha
             6 => 4, // RGBA
-            other => {
-                return Err(Error::invalid(format!(
-                    "PNG: bad colour type {other}"
-                )))
-            }
+            other => return Err(Error::invalid(format!("PNG: bad colour type {other}"))),
         })
     }
 
@@ -223,7 +219,9 @@ pub fn decode_png_to_frame(
         .ok_or_else(|| Error::invalid("PNG: missing IHDR"))?;
     let ihdr = Ihdr::parse(ihdr_chunk.data)?;
     if ihdr.interlace != 0 {
-        return Err(Error::unsupported("PNG: interlaced (Adam7) not implemented"));
+        return Err(Error::unsupported(
+            "PNG: interlaced (Adam7) not implemented",
+        ));
     }
     if ihdr.compression != 0 {
         return Err(Error::invalid("PNG: unknown compression method"));
@@ -327,8 +325,8 @@ fn build_video_frame(
             (w, raw.to_vec())
         }
         PixelFormat::Pal8 => {
-            let _plte = plte
-                .ok_or_else(|| Error::invalid("PNG: colour type 3 requires PLTE chunk"))?;
+            let _plte =
+                plte.ok_or_else(|| Error::invalid("PNG: colour type 3 requires PLTE chunk"))?;
             let _ = trns;
             (w, raw.to_vec())
         }
@@ -523,10 +521,7 @@ pub fn parse_apng(buf: &[u8]) -> Result<ApngInfo> {
 ///
 /// In this initial cut we composite into a canvas-sized frame so the top
 /// level API is simpler for downstream consumers.
-pub fn decode_apng_frames(
-    info: &ApngInfo,
-    time_base: TimeBase,
-) -> Result<Vec<VideoFrame>> {
+pub fn decode_apng_frames(info: &ApngInfo, time_base: TimeBase) -> Result<Vec<VideoFrame>> {
     let canvas_w = info.ihdr.width;
     let canvas_h = info.ihdr.height;
     let canvas_fmt = info.ihdr.output_pixel_format()?;
@@ -666,7 +661,8 @@ fn blit_sub_into_canvas(
         let row_cap = (canvas_w - x_off.min(canvas_w)).min(sub_w);
         for sx in 0..row_cap {
             let dx = x_off + sx;
-            let src = &sub.planes[0].data[sy * sub_stride + sx * bpp..sy * sub_stride + (sx + 1) * bpp];
+            let src =
+                &sub.planes[0].data[sy * sub_stride + sx * bpp..sy * sub_stride + (sx + 1) * bpp];
             let dst_start = dy * stride_canvas + dx * bpp;
             let dst = &mut canvas[dst_start..dst_start + bpp];
             match blend {
@@ -692,8 +688,7 @@ fn blit_sub_into_canvas(
                             }
                             // Alpha over: a_out = a_src + a_dst * (1 - a_src)
                             let a_dst = dst[3] as u32;
-                            dst[3] =
-                                (a + ((a_dst * inv + 127) / 255)) as u8;
+                            dst[3] = (a + ((a_dst * inv + 127) / 255)) as u8;
                         }
                     } else if bpp == 2 && matches!(sub.format, PixelFormat::Ya8) {
                         let a = src[1] as u32;

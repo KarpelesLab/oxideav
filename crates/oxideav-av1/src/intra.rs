@@ -126,13 +126,7 @@ fn mode_section_id(mode: IntraMode) -> &'static str {
 /// `DC_PRED` — mean of the available neighbour rows. Pads to the block
 /// size. If neither row is available the mid-grey value `1 << (bitdepth-1)`
 /// is used (bitdepth=8 → 128).
-fn dc_pred(
-    n: Neighbours<'_>,
-    w: usize,
-    h: usize,
-    dst: &mut [u8],
-    dst_stride: usize,
-) -> Result<()> {
+fn dc_pred(n: Neighbours<'_>, w: usize, h: usize, dst: &mut [u8], dst_stride: usize) -> Result<()> {
     let dc = match (n.above, n.left) {
         (Some(a), Some(l)) => {
             let sum_a: u32 = a.iter().take(w).map(|&v| v as u32).sum();
@@ -156,16 +150,10 @@ fn dc_pred(
 }
 
 /// `V_PRED` — copy the above row down.
-fn v_pred(
-    n: Neighbours<'_>,
-    w: usize,
-    h: usize,
-    dst: &mut [u8],
-    dst_stride: usize,
-) -> Result<()> {
-    let above = n.above.ok_or_else(|| {
-        Error::invalid("av1 V_PRED: above-row unavailable (§7.11.2.4)")
-    })?;
+fn v_pred(n: Neighbours<'_>, w: usize, h: usize, dst: &mut [u8], dst_stride: usize) -> Result<()> {
+    let above = n
+        .above
+        .ok_or_else(|| Error::invalid("av1 V_PRED: above-row unavailable (§7.11.2.4)"))?;
     if above.len() < w {
         return Err(Error::invalid(
             "av1 V_PRED: above-row shorter than block width",
@@ -179,16 +167,10 @@ fn v_pred(
 }
 
 /// `H_PRED` — copy each left-column sample across its row.
-fn h_pred(
-    n: Neighbours<'_>,
-    w: usize,
-    h: usize,
-    dst: &mut [u8],
-    dst_stride: usize,
-) -> Result<()> {
-    let left = n.left.ok_or_else(|| {
-        Error::invalid("av1 H_PRED: left-column unavailable (§7.11.2.3)")
-    })?;
+fn h_pred(n: Neighbours<'_>, w: usize, h: usize, dst: &mut [u8], dst_stride: usize) -> Result<()> {
+    let left = n
+        .left
+        .ok_or_else(|| Error::invalid("av1 H_PRED: left-column unavailable (§7.11.2.3)"))?;
     if left.len() < h {
         return Err(Error::invalid(
             "av1 H_PRED: left-column shorter than block height",

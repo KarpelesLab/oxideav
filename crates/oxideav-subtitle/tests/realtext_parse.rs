@@ -79,17 +79,19 @@ fn probe_positive() {
 #[test]
 fn probe_rejects_other() {
     assert_eq!(realtext::probe(b"WEBVTT\n"), 0);
-    assert_eq!(realtext::probe(b"1\n00:00:01,000 --> 00:00:02,000\nhi\n"), 0);
+    assert_eq!(
+        realtext::probe(b"1\n00:00:01,000 --> 00:00:02,000\nhi\n"),
+        0
+    );
 }
 
 fn visit<F: FnMut(&Segment)>(segs: &[Segment], f: &mut F) {
     for s in segs {
         f(s);
         match s {
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => visit(c, f),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                visit(c, f)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }

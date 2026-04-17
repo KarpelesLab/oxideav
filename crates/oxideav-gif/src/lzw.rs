@@ -270,9 +270,8 @@ impl LzwDecoder {
                 (first_byte[code as usize], &scratch[..])
             } else if code == dict_len {
                 // KwKwK: special-case the not-yet-added entry.
-                let p = prev_code.ok_or_else(|| {
-                    Error::invalid("LZW: KwKwK code with no previous code")
-                })?;
+                let p = prev_code
+                    .ok_or_else(|| Error::invalid("LZW: KwKwK code with no previous code"))?;
                 decode_string(&prefix, &suffix, p, &mut scratch);
                 let fb = scratch[0];
                 scratch.push(fb);

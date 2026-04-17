@@ -32,9 +32,7 @@ pub use transform::{ass_to_srt, ass_to_webvtt, srt_to_ass, webvtt_to_ass};
 // ---------------------------------------------------------------------------
 // Parser / writer (moved verbatim from oxideav-subtitle::ass).
 
-use oxideav_core::{
-    CuePosition, Error, Result, Segment, SubtitleCue, SubtitleStyle, TextAlign,
-};
+use oxideav_core::{CuePosition, Error, Result, Segment, SubtitleCue, SubtitleStyle, TextAlign};
 use oxideav_subtitle::ir::{SourceFormat, SubtitleTrack};
 
 pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
@@ -86,9 +84,10 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
         match current_section.as_str() {
             "script info" => {
                 if let Some((k, v)) = trimmed.split_once(':') {
-                    track
-                        .metadata
-                        .push((k.trim().to_ascii_lowercase().replace(' ', "_"), v.trim().to_string()));
+                    track.metadata.push((
+                        k.trim().to_ascii_lowercase().replace(' ', "_"),
+                        v.trim().to_string(),
+                    ));
                 }
                 extradata.push_str(line);
                 extradata.push('\n');
@@ -97,10 +96,7 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
                 extradata.push_str(line);
                 extradata.push('\n');
                 if let Some(rest) = strip_prefix_case(trimmed, "Format:") {
-                    style_format = rest
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .collect();
+                    style_format = rest.split(',').map(|s| s.trim().to_string()).collect();
                 } else if let Some(rest) = strip_prefix_case(trimmed, "Style:") {
                     if let Some(style) = parse_style_line(rest, &style_format, is_ssa) {
                         track.styles.push(style);
@@ -109,10 +105,7 @@ pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
             }
             "events" => {
                 if let Some(rest) = strip_prefix_case(trimmed, "Format:") {
-                    event_format = rest
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .collect();
+                    event_format = rest.split(',').map(|s| s.trim().to_string()).collect();
                     extradata.push_str(line);
                     extradata.push('\n');
                 } else if let Some(rest) = strip_prefix_case(trimmed, "Dialogue:") {
@@ -325,12 +318,20 @@ fn parse_ass_timestamp(s: &str) -> Option<i64> {
             parts[1].parse::<u32>().ok()?,
             parts[2].parse::<u32>().ok()?,
         ),
-        2 => (0u32, parts[0].parse::<u32>().ok()?, parts[1].parse::<u32>().ok()?),
+        2 => (
+            0u32,
+            parts[0].parse::<u32>().ok()?,
+            parts[1].parse::<u32>().ok()?,
+        ),
         _ => return None,
     };
     // `frac` is centiseconds (2 digits) but be robust to 1-3 digit forms.
     let cs_str = if frac.len() > 2 { &frac[..2] } else { frac };
-    let cs: u32 = if cs_str.is_empty() { 0 } else { cs_str.parse().ok()? };
+    let cs: u32 = if cs_str.is_empty() {
+        0
+    } else {
+        cs_str.parse().ok()?
+    };
     // Pad to 2 digits if only 1 was given.
     let cs = if frac.len() == 1 { cs * 10 } else { cs };
     Some(
@@ -618,7 +619,9 @@ pub fn write(track: &SubtitleTrack) -> Vec<u8> {
         }
         out.push('\n');
         out.push_str("[Events]\n");
-        out.push_str("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+        out.push_str(
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+        );
     }
     for cue in &track.cues {
         let txt = render_event_text(cue);
@@ -649,7 +652,8 @@ fn capitalise_key(k: &str) -> String {
 }
 
 fn default_style_line() -> String {
-    "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,2,10,10,10,1,0\n".into()
+    "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,2,10,10,10,1,0\n"
+        .into()
 }
 
 fn style_row(s: &SubtitleStyle) -> String {
@@ -745,7 +749,10 @@ fn append_ass_segments(segments: &[Segment], out: &mut String) {
                 out.push_str("{\\s0}");
             }
             Segment::Color { rgb, children } => {
-                out.push_str(&format!("{{\\c&H{:02X}{:02X}{:02X}&}}", rgb.2, rgb.1, rgb.0));
+                out.push_str(&format!(
+                    "{{\\c&H{:02X}{:02X}{:02X}&}}",
+                    rgb.2, rgb.1, rgb.0
+                ));
                 append_ass_segments(children, out);
                 out.push_str("{\\c}");
             }

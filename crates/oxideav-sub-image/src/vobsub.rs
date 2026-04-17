@@ -85,12 +85,14 @@ pub fn parse_idx(text: &str) -> Result<VobSubIdx> {
         if let Some(rest) = line.strip_prefix("size:") {
             let rest = rest.trim();
             if let Some((w, h)) = rest.split_once('x') {
-                let w: u16 = w.trim().parse().map_err(|e| {
-                    Error::invalid(format!("vobsub idx: bad size width: {e}"))
-                })?;
-                let h: u16 = h.trim().parse().map_err(|e| {
-                    Error::invalid(format!("vobsub idx: bad size height: {e}"))
-                })?;
+                let w: u16 = w
+                    .trim()
+                    .parse()
+                    .map_err(|e| Error::invalid(format!("vobsub idx: bad size width: {e}")))?;
+                let h: u16 = h
+                    .trim()
+                    .parse()
+                    .map_err(|e| Error::invalid(format!("vobsub idx: bad size height: {e}")))?;
                 idx.size = (w, h);
             }
         } else if let Some(rest) = line.strip_prefix("palette:") {
@@ -104,7 +106,10 @@ pub fn parse_idx(text: &str) -> Result<VobSubIdx> {
 
 fn parse_palette_line(s: &str, idx: &mut VobSubIdx) -> Result<()> {
     let mut cnt = 0usize;
-    for token in s.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty()) {
+    for token in s
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+    {
         if cnt >= 16 {
             break;
         }
@@ -227,9 +232,7 @@ pub fn parse_and_decode_spu(spu: &[u8]) -> Result<(Spu, Vec<u8>, (u16, u16))> {
                 }
                 0x03 => {
                     if cmd_pos + 2 > spu_len {
-                        return Err(Error::invalid(
-                            "vobsub SPU: palette command truncated",
-                        ));
+                        return Err(Error::invalid("vobsub SPU: palette command truncated"));
                     }
                     let b0 = spu[cmd_pos];
                     let b1 = spu[cmd_pos + 1];
@@ -241,9 +244,7 @@ pub fn parse_and_decode_spu(spu: &[u8]) -> Result<(Spu, Vec<u8>, (u16, u16))> {
                 }
                 0x04 => {
                     if cmd_pos + 2 > spu_len {
-                        return Err(Error::invalid(
-                            "vobsub SPU: alpha command truncated",
-                        ));
+                        return Err(Error::invalid("vobsub SPU: alpha command truncated"));
                     }
                     let b0 = spu[cmd_pos];
                     let b1 = spu[cmd_pos + 1];
@@ -255,9 +256,7 @@ pub fn parse_and_decode_spu(spu: &[u8]) -> Result<(Spu, Vec<u8>, (u16, u16))> {
                 }
                 0x05 => {
                     if cmd_pos + 6 > spu_len {
-                        return Err(Error::invalid(
-                            "vobsub SPU: coords command truncated",
-                        ));
+                        return Err(Error::invalid("vobsub SPU: coords command truncated"));
                     }
                     let b0 = spu[cmd_pos];
                     let b1 = spu[cmd_pos + 1];
@@ -273,14 +272,10 @@ pub fn parse_and_decode_spu(spu: &[u8]) -> Result<(Spu, Vec<u8>, (u16, u16))> {
                 }
                 0x06 => {
                     if cmd_pos + 4 > spu_len {
-                        return Err(Error::invalid(
-                            "vobsub SPU: rle-offsets command truncated",
-                        ));
+                        return Err(Error::invalid("vobsub SPU: rle-offsets command truncated"));
                     }
-                    out.top_rle_off =
-                        u16::from_be_bytes([spu[cmd_pos], spu[cmd_pos + 1]]);
-                    out.bot_rle_off =
-                        u16::from_be_bytes([spu[cmd_pos + 2], spu[cmd_pos + 3]]);
+                    out.top_rle_off = u16::from_be_bytes([spu[cmd_pos], spu[cmd_pos + 1]]);
+                    out.bot_rle_off = u16::from_be_bytes([spu[cmd_pos + 2], spu[cmd_pos + 3]]);
                     cmd_pos += 4;
                 }
                 0xFF => {
@@ -315,11 +310,7 @@ pub fn parse_and_decode_spu(spu: &[u8]) -> Result<(Spu, Vec<u8>, (u16, u16))> {
         if top_off >= spu_len {
             return Err(Error::invalid("vobsub SPU: top offset out of range"));
         }
-        let bot_end = if bot_off > top_off {
-            bot_off
-        } else {
-            ctrl_off
-        };
+        let bot_end = if bot_off > top_off { bot_off } else { ctrl_off };
         let top_bytes = &spu[top_off..bot_end.min(ctrl_off)];
         let bot_bytes = if bot_off > 0 {
             &spu[bot_off..ctrl_off]
@@ -808,9 +799,21 @@ pub fn build_demo_spu(width: u16, height: u16, indices: &[u8]) -> Vec<u8> {
 
     // Build top & bottom RLE byte blocks.
     let mut top_bytes = Vec::new();
-    push_rle_rows(&mut top_bytes, indices, width, height, (0..height as usize).step_by(2));
+    push_rle_rows(
+        &mut top_bytes,
+        indices,
+        width,
+        height,
+        (0..height as usize).step_by(2),
+    );
     let mut bot_bytes = Vec::new();
-    push_rle_rows(&mut bot_bytes, indices, width, height, (1..height as usize).step_by(2));
+    push_rle_rows(
+        &mut bot_bytes,
+        indices,
+        width,
+        height,
+        (1..height as usize).step_by(2),
+    );
 
     // Layout:
     //   [0..2]  SPU length
@@ -830,7 +833,7 @@ pub fn build_demo_spu(width: u16, height: u16, indices: &[u8]) -> Vec<u8> {
     // Single control sequence.
     let ctrl_pos = out.len();
     out.extend_from_slice(&[0, 0]); // delay = 0
-    // next_offset placeholder — will point back to itself at end.
+                                    // next_offset placeholder — will point back to itself at end.
     out.extend_from_slice(&[0, 0]);
     out.push(0x03); // palette select
     out.push(0x01); // bg=0, pat=1

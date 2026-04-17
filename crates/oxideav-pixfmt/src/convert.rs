@@ -44,10 +44,7 @@ pub struct ConvertOptions {
 /// Return `Some(src)` when the caller's destination format already
 /// matches the source's format — useful to skip a pointless clone in
 /// hot paths.
-pub fn convert_in_place_if_same(
-    src: &VideoFrame,
-    dst_format: PixelFormat,
-) -> Option<&VideoFrame> {
+pub fn convert_in_place_if_same(src: &VideoFrame, dst_format: PixelFormat) -> Option<&VideoFrame> {
     if src.format == dst_format {
         Some(src)
     } else {
@@ -56,7 +53,11 @@ pub fn convert_in_place_if_same(
 }
 
 /// Convert `src` to `dst_format`, producing a newly allocated frame.
-pub fn convert(src: &VideoFrame, dst_format: PixelFormat, opts: &ConvertOptions) -> Result<VideoFrame> {
+pub fn convert(
+    src: &VideoFrame,
+    dst_format: PixelFormat,
+    opts: &ConvertOptions,
+) -> Result<VideoFrame> {
     if src.format == dst_format {
         return Ok(src.clone());
     }
@@ -65,40 +66,100 @@ pub fn convert(src: &VideoFrame, dst_format: PixelFormat, opts: &ConvertOptions)
         // -----------------------------------------------------------------
         // RGB family swizzles (3- and 4-byte packed all-to-all).
         // -----------------------------------------------------------------
-        (PixelFormat::Rgb24, PixelFormat::Bgr24) => swizzle3(src, dst_format, rgb::RGB_POS, rgb::BGR_POS),
-        (PixelFormat::Bgr24, PixelFormat::Rgb24) => swizzle3(src, dst_format, rgb::BGR_POS, rgb::RGB_POS),
+        (PixelFormat::Rgb24, PixelFormat::Bgr24) => {
+            swizzle3(src, dst_format, rgb::RGB_POS, rgb::BGR_POS)
+        }
+        (PixelFormat::Bgr24, PixelFormat::Rgb24) => {
+            swizzle3(src, dst_format, rgb::BGR_POS, rgb::RGB_POS)
+        }
 
-        (PixelFormat::Rgba, PixelFormat::Bgra) => swizzle4(src, dst_format, rgb::RGBA_POS, rgb::BGRA_POS),
-        (PixelFormat::Bgra, PixelFormat::Rgba) => swizzle4(src, dst_format, rgb::BGRA_POS, rgb::RGBA_POS),
-        (PixelFormat::Rgba, PixelFormat::Argb) => swizzle4(src, dst_format, rgb::RGBA_POS, rgb::ARGB_POS),
-        (PixelFormat::Argb, PixelFormat::Rgba) => swizzle4(src, dst_format, rgb::ARGB_POS, rgb::RGBA_POS),
-        (PixelFormat::Rgba, PixelFormat::Abgr) => swizzle4(src, dst_format, rgb::RGBA_POS, rgb::ABGR_POS),
-        (PixelFormat::Abgr, PixelFormat::Rgba) => swizzle4(src, dst_format, rgb::ABGR_POS, rgb::RGBA_POS),
-        (PixelFormat::Bgra, PixelFormat::Argb) => swizzle4(src, dst_format, rgb::BGRA_POS, rgb::ARGB_POS),
-        (PixelFormat::Argb, PixelFormat::Bgra) => swizzle4(src, dst_format, rgb::ARGB_POS, rgb::BGRA_POS),
-        (PixelFormat::Bgra, PixelFormat::Abgr) => swizzle4(src, dst_format, rgb::BGRA_POS, rgb::ABGR_POS),
-        (PixelFormat::Abgr, PixelFormat::Bgra) => swizzle4(src, dst_format, rgb::ABGR_POS, rgb::BGRA_POS),
-        (PixelFormat::Argb, PixelFormat::Abgr) => swizzle4(src, dst_format, rgb::ARGB_POS, rgb::ABGR_POS),
-        (PixelFormat::Abgr, PixelFormat::Argb) => swizzle4(src, dst_format, rgb::ABGR_POS, rgb::ARGB_POS),
+        (PixelFormat::Rgba, PixelFormat::Bgra) => {
+            swizzle4(src, dst_format, rgb::RGBA_POS, rgb::BGRA_POS)
+        }
+        (PixelFormat::Bgra, PixelFormat::Rgba) => {
+            swizzle4(src, dst_format, rgb::BGRA_POS, rgb::RGBA_POS)
+        }
+        (PixelFormat::Rgba, PixelFormat::Argb) => {
+            swizzle4(src, dst_format, rgb::RGBA_POS, rgb::ARGB_POS)
+        }
+        (PixelFormat::Argb, PixelFormat::Rgba) => {
+            swizzle4(src, dst_format, rgb::ARGB_POS, rgb::RGBA_POS)
+        }
+        (PixelFormat::Rgba, PixelFormat::Abgr) => {
+            swizzle4(src, dst_format, rgb::RGBA_POS, rgb::ABGR_POS)
+        }
+        (PixelFormat::Abgr, PixelFormat::Rgba) => {
+            swizzle4(src, dst_format, rgb::ABGR_POS, rgb::RGBA_POS)
+        }
+        (PixelFormat::Bgra, PixelFormat::Argb) => {
+            swizzle4(src, dst_format, rgb::BGRA_POS, rgb::ARGB_POS)
+        }
+        (PixelFormat::Argb, PixelFormat::Bgra) => {
+            swizzle4(src, dst_format, rgb::ARGB_POS, rgb::BGRA_POS)
+        }
+        (PixelFormat::Bgra, PixelFormat::Abgr) => {
+            swizzle4(src, dst_format, rgb::BGRA_POS, rgb::ABGR_POS)
+        }
+        (PixelFormat::Abgr, PixelFormat::Bgra) => {
+            swizzle4(src, dst_format, rgb::ABGR_POS, rgb::BGRA_POS)
+        }
+        (PixelFormat::Argb, PixelFormat::Abgr) => {
+            swizzle4(src, dst_format, rgb::ARGB_POS, rgb::ABGR_POS)
+        }
+        (PixelFormat::Abgr, PixelFormat::Argb) => {
+            swizzle4(src, dst_format, rgb::ABGR_POS, rgb::ARGB_POS)
+        }
 
         // 3 ↔ 4 mixes (promote with opaque alpha, or drop alpha).
-        (PixelFormat::Rgb24, PixelFormat::Rgba) => promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::RGBA_POS),
-        (PixelFormat::Rgb24, PixelFormat::Bgra) => promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::BGRA_POS),
-        (PixelFormat::Rgb24, PixelFormat::Argb) => promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::ARGB_POS),
-        (PixelFormat::Rgb24, PixelFormat::Abgr) => promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::ABGR_POS),
-        (PixelFormat::Bgr24, PixelFormat::Rgba) => promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::RGBA_POS),
-        (PixelFormat::Bgr24, PixelFormat::Bgra) => promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::BGRA_POS),
-        (PixelFormat::Bgr24, PixelFormat::Argb) => promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::ARGB_POS),
-        (PixelFormat::Bgr24, PixelFormat::Abgr) => promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::ABGR_POS),
+        (PixelFormat::Rgb24, PixelFormat::Rgba) => {
+            promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::RGBA_POS)
+        }
+        (PixelFormat::Rgb24, PixelFormat::Bgra) => {
+            promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::BGRA_POS)
+        }
+        (PixelFormat::Rgb24, PixelFormat::Argb) => {
+            promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::ARGB_POS)
+        }
+        (PixelFormat::Rgb24, PixelFormat::Abgr) => {
+            promote3_to_4(src, dst_format, rgb::RGB_POS, rgb::ABGR_POS)
+        }
+        (PixelFormat::Bgr24, PixelFormat::Rgba) => {
+            promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::RGBA_POS)
+        }
+        (PixelFormat::Bgr24, PixelFormat::Bgra) => {
+            promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::BGRA_POS)
+        }
+        (PixelFormat::Bgr24, PixelFormat::Argb) => {
+            promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::ARGB_POS)
+        }
+        (PixelFormat::Bgr24, PixelFormat::Abgr) => {
+            promote3_to_4(src, dst_format, rgb::BGR_POS, rgb::ABGR_POS)
+        }
 
-        (PixelFormat::Rgba, PixelFormat::Rgb24) => demote4_to_3(src, dst_format, rgb::RGBA_POS, rgb::RGB_POS),
-        (PixelFormat::Rgba, PixelFormat::Bgr24) => demote4_to_3(src, dst_format, rgb::RGBA_POS, rgb::BGR_POS),
-        (PixelFormat::Bgra, PixelFormat::Rgb24) => demote4_to_3(src, dst_format, rgb::BGRA_POS, rgb::RGB_POS),
-        (PixelFormat::Bgra, PixelFormat::Bgr24) => demote4_to_3(src, dst_format, rgb::BGRA_POS, rgb::BGR_POS),
-        (PixelFormat::Argb, PixelFormat::Rgb24) => demote4_to_3(src, dst_format, rgb::ARGB_POS, rgb::RGB_POS),
-        (PixelFormat::Argb, PixelFormat::Bgr24) => demote4_to_3(src, dst_format, rgb::ARGB_POS, rgb::BGR_POS),
-        (PixelFormat::Abgr, PixelFormat::Rgb24) => demote4_to_3(src, dst_format, rgb::ABGR_POS, rgb::RGB_POS),
-        (PixelFormat::Abgr, PixelFormat::Bgr24) => demote4_to_3(src, dst_format, rgb::ABGR_POS, rgb::BGR_POS),
+        (PixelFormat::Rgba, PixelFormat::Rgb24) => {
+            demote4_to_3(src, dst_format, rgb::RGBA_POS, rgb::RGB_POS)
+        }
+        (PixelFormat::Rgba, PixelFormat::Bgr24) => {
+            demote4_to_3(src, dst_format, rgb::RGBA_POS, rgb::BGR_POS)
+        }
+        (PixelFormat::Bgra, PixelFormat::Rgb24) => {
+            demote4_to_3(src, dst_format, rgb::BGRA_POS, rgb::RGB_POS)
+        }
+        (PixelFormat::Bgra, PixelFormat::Bgr24) => {
+            demote4_to_3(src, dst_format, rgb::BGRA_POS, rgb::BGR_POS)
+        }
+        (PixelFormat::Argb, PixelFormat::Rgb24) => {
+            demote4_to_3(src, dst_format, rgb::ARGB_POS, rgb::RGB_POS)
+        }
+        (PixelFormat::Argb, PixelFormat::Bgr24) => {
+            demote4_to_3(src, dst_format, rgb::ARGB_POS, rgb::BGR_POS)
+        }
+        (PixelFormat::Abgr, PixelFormat::Rgb24) => {
+            demote4_to_3(src, dst_format, rgb::ABGR_POS, rgb::RGB_POS)
+        }
+        (PixelFormat::Abgr, PixelFormat::Bgr24) => {
+            demote4_to_3(src, dst_format, rgb::ABGR_POS, rgb::BGR_POS)
+        }
 
         // -----------------------------------------------------------------
         // Deeper packed RGB ↔ 8-bit.
@@ -123,24 +184,54 @@ pub fn convert(src: &VideoFrame, dst_format: PixelFormat, opts: &ConvertOptions)
         // -----------------------------------------------------------------
         // YUV ↔ RGB.
         // -----------------------------------------------------------------
-        (PixelFormat::Yuv420P, PixelFormat::Rgb24) => do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 2, false),
-        (PixelFormat::Yuv422P, PixelFormat::Rgb24) => do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 1, false),
-        (PixelFormat::Yuv444P, PixelFormat::Rgb24) => do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 1, 1, false),
-        (PixelFormat::Yuv420P, PixelFormat::Rgba) => do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 2, true),
-        (PixelFormat::Yuv422P, PixelFormat::Rgba) => do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 1, true),
-        (PixelFormat::Yuv444P, PixelFormat::Rgba) => do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 1, 1, true),
+        (PixelFormat::Yuv420P, PixelFormat::Rgb24) => {
+            do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 2, false)
+        }
+        (PixelFormat::Yuv422P, PixelFormat::Rgb24) => {
+            do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 1, false)
+        }
+        (PixelFormat::Yuv444P, PixelFormat::Rgb24) => {
+            do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 1, 1, false)
+        }
+        (PixelFormat::Yuv420P, PixelFormat::Rgba) => {
+            do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 2, true)
+        }
+        (PixelFormat::Yuv422P, PixelFormat::Rgba) => {
+            do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 2, 1, true)
+        }
+        (PixelFormat::Yuv444P, PixelFormat::Rgba) => {
+            do_yuv_to_rgb(src, dst_format, matrix.with_range(true), 1, 1, true)
+        }
 
-        (PixelFormat::Rgb24, PixelFormat::Yuv420P) => do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 2, false),
-        (PixelFormat::Rgb24, PixelFormat::Yuv422P) => do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 1, false),
-        (PixelFormat::Rgb24, PixelFormat::Yuv444P) => do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 1, 1, false),
-        (PixelFormat::Rgba, PixelFormat::Yuv420P) => do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 2, true),
-        (PixelFormat::Rgba, PixelFormat::Yuv422P) => do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 1, true),
-        (PixelFormat::Rgba, PixelFormat::Yuv444P) => do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 1, 1, true),
+        (PixelFormat::Rgb24, PixelFormat::Yuv420P) => {
+            do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 2, false)
+        }
+        (PixelFormat::Rgb24, PixelFormat::Yuv422P) => {
+            do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 1, false)
+        }
+        (PixelFormat::Rgb24, PixelFormat::Yuv444P) => {
+            do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 1, 1, false)
+        }
+        (PixelFormat::Rgba, PixelFormat::Yuv420P) => {
+            do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 2, true)
+        }
+        (PixelFormat::Rgba, PixelFormat::Yuv422P) => {
+            do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 2, 1, true)
+        }
+        (PixelFormat::Rgba, PixelFormat::Yuv444P) => {
+            do_rgb_to_yuv(src, dst_format, matrix.with_range(true), 1, 1, true)
+        }
 
         // YuvJ* ↔ Yuv* (range rescale).
-        (PixelFormat::YuvJ420P, PixelFormat::Yuv420P) => rescale_range(src, dst_format, 2, 2, false),
-        (PixelFormat::YuvJ422P, PixelFormat::Yuv422P) => rescale_range(src, dst_format, 2, 1, false),
-        (PixelFormat::YuvJ444P, PixelFormat::Yuv444P) => rescale_range(src, dst_format, 1, 1, false),
+        (PixelFormat::YuvJ420P, PixelFormat::Yuv420P) => {
+            rescale_range(src, dst_format, 2, 2, false)
+        }
+        (PixelFormat::YuvJ422P, PixelFormat::Yuv422P) => {
+            rescale_range(src, dst_format, 2, 1, false)
+        }
+        (PixelFormat::YuvJ444P, PixelFormat::Yuv444P) => {
+            rescale_range(src, dst_format, 1, 1, false)
+        }
         (PixelFormat::Yuv420P, PixelFormat::YuvJ420P) => rescale_range(src, dst_format, 2, 2, true),
         (PixelFormat::Yuv422P, PixelFormat::YuvJ422P) => rescale_range(src, dst_format, 2, 1, true),
         (PixelFormat::Yuv444P, PixelFormat::YuvJ444P) => rescale_range(src, dst_format, 1, 1, true),
@@ -210,9 +301,22 @@ fn swizzle3(
     let mut out = vec![0u8; w * h * 3];
     for row in 0..h {
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 3);
-        rgb::swizzle3(sr, src_pos, &mut out[row * w * 3..row * w * 3 + w * 3], dst_pos, w);
+        rgb::swizzle3(
+            sr,
+            src_pos,
+            &mut out[row * w * 3..row * w * 3 + w * 3],
+            dst_pos,
+            w,
+        );
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 3, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 3,
+            data: out,
+        }],
+    ))
 }
 
 fn swizzle4(
@@ -227,9 +331,22 @@ fn swizzle4(
     let mut out = vec![0u8; w * h * 4];
     for row in 0..h {
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 4);
-        rgb::swizzle4(sr, src_pos, &mut out[row * w * 4..row * w * 4 + w * 4], dst_pos, w);
+        rgb::swizzle4(
+            sr,
+            src_pos,
+            &mut out[row * w * 4..row * w * 4 + w * 4],
+            dst_pos,
+            w,
+        );
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 4, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 4,
+            data: out,
+        }],
+    ))
 }
 
 fn promote3_to_4(
@@ -244,9 +361,22 @@ fn promote3_to_4(
     let mut out = vec![0u8; w * h * 4];
     for row in 0..h {
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 3);
-        rgb::rgb3_to_rgba4(sr, src_pos, &mut out[row * w * 4..row * w * 4 + w * 4], dst_pos, w);
+        rgb::rgb3_to_rgba4(
+            sr,
+            src_pos,
+            &mut out[row * w * 4..row * w * 4 + w * 4],
+            dst_pos,
+            w,
+        );
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 4, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 4,
+            data: out,
+        }],
+    ))
 }
 
 fn demote4_to_3(
@@ -261,9 +391,22 @@ fn demote4_to_3(
     let mut out = vec![0u8; w * h * 3];
     for row in 0..h {
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 4);
-        rgb::rgba4_to_rgb3(sr, src_pos, &mut out[row * w * 3..row * w * 3 + w * 3], dst_pos, w);
+        rgb::rgba4_to_rgb3(
+            sr,
+            src_pos,
+            &mut out[row * w * 3..row * w * 3 + w * 3],
+            dst_pos,
+            w,
+        );
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 3, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 3,
+            data: out,
+        }],
+    ))
 }
 
 // -------------------------------------------------------------------------
@@ -278,7 +421,14 @@ fn do_rgb48_to_rgb24(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoF
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 6);
         rgb::rgb48_to_rgb24(sr, &mut out[row * w * 3..row * w * 3 + w * 3], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 3, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 3,
+            data: out,
+        }],
+    ))
 }
 
 fn do_rgb24_to_rgb48(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFrame> {
@@ -290,7 +440,14 @@ fn do_rgb24_to_rgb48(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoF
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 3);
         rgb::rgb24_to_rgb48(sr, &mut out[row * w * 6..row * w * 6 + w * 6], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 6, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 6,
+            data: out,
+        }],
+    ))
 }
 
 fn do_rgba64_to_rgba(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFrame> {
@@ -302,7 +459,14 @@ fn do_rgba64_to_rgba(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoF
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 8);
         rgb::rgba64_to_rgba(sr, &mut out[row * w * 4..row * w * 4 + w * 4], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 4, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 4,
+            data: out,
+        }],
+    ))
 }
 
 fn do_rgba_to_rgba64(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFrame> {
@@ -314,7 +478,14 @@ fn do_rgba_to_rgba64(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoF
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 4);
         rgb::rgba_to_rgba64(sr, &mut out[row * w * 8..row * w * 8 + w * 8], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 8, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 8,
+            data: out,
+        }],
+    ))
 }
 
 // -------------------------------------------------------------------------
@@ -329,7 +500,14 @@ fn gray_to_packed3(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFra
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w);
         gray::gray8_to_rgb24(sr, &mut out[row * w * 3..row * w * 3 + w * 3], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 3, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 3,
+            data: out,
+        }],
+    ))
 }
 
 fn gray_to_packed4(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFrame> {
@@ -341,7 +519,14 @@ fn gray_to_packed4(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFra
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w);
         gray::gray8_to_rgba(sr, &mut out[row * w * 4..row * w * 4 + w * 4], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 4, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 4,
+            data: out,
+        }],
+    ))
 }
 
 fn do_gray16_to_gray8(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFrame> {
@@ -353,7 +538,14 @@ fn do_gray16_to_gray8(src: &VideoFrame, dst_format: PixelFormat) -> Result<Video
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w * 2);
         gray::gray16le_to_gray8(sr, &mut out[row * w..row * w + w], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w,
+            data: out,
+        }],
+    ))
 }
 
 fn do_gray8_to_gray16(src: &VideoFrame, dst_format: PixelFormat) -> Result<VideoFrame> {
@@ -365,10 +557,21 @@ fn do_gray8_to_gray16(src: &VideoFrame, dst_format: PixelFormat) -> Result<Video
         let sr = tight_row(&in_plane.data, in_plane.stride, row, w);
         gray::gray8_to_gray16le(sr, &mut out[row * w * 2..row * w * 2 + w * 2], w);
     }
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w * 2, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w * 2,
+            data: out,
+        }],
+    ))
 }
 
-fn do_mono_to_gray(src: &VideoFrame, dst_format: PixelFormat, black_is_zero: bool) -> Result<VideoFrame> {
+fn do_mono_to_gray(
+    src: &VideoFrame,
+    dst_format: PixelFormat,
+    black_is_zero: bool,
+) -> Result<VideoFrame> {
     let w = src.width as usize;
     let h = src.height as usize;
     let in_plane = &src.planes[0];
@@ -378,10 +581,21 @@ fn do_mono_to_gray(src: &VideoFrame, dst_format: PixelFormat, black_is_zero: boo
     let src_stride = in_plane.stride;
     let compact = gather_mono_rows(&in_plane.data, src_stride, (w + 7) / 8, h);
     gray::mono_to_gray8(&compact, &mut out, w, h, black_is_zero);
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: w, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: w,
+            data: out,
+        }],
+    ))
 }
 
-fn do_gray_to_mono(src: &VideoFrame, dst_format: PixelFormat, black_is_zero: bool) -> Result<VideoFrame> {
+fn do_gray_to_mono(
+    src: &VideoFrame,
+    dst_format: PixelFormat,
+    black_is_zero: bool,
+) -> Result<VideoFrame> {
     let w = src.width as usize;
     let h = src.height as usize;
     let in_plane = &src.planes[0];
@@ -389,7 +603,14 @@ fn do_gray_to_mono(src: &VideoFrame, dst_format: PixelFormat, black_is_zero: boo
     let src_tight = gather_tight(&in_plane.data, in_plane.stride, w, h);
     let mut out = vec![0u8; packed_stride * h];
     gray::gray8_to_mono(&src_tight, &mut out, w, h, black_is_zero);
-    Ok(make_frame(src, dst_format, vec![VideoPlane { stride: packed_stride, data: out }]))
+    Ok(make_frame(
+        src,
+        dst_format,
+        vec![VideoPlane {
+            stride: packed_stride,
+            data: out,
+        }],
+    ))
 }
 
 fn gather_mono_rows(src: &[u8], stride: usize, packed: usize, h: usize) -> Vec<u8> {
@@ -509,9 +730,18 @@ fn do_rgb_to_yuv(
         src,
         dst_format,
         vec![
-            VideoPlane { stride: w, data: yp },
-            VideoPlane { stride: cw, data: up },
-            VideoPlane { stride: cw, data: vp },
+            VideoPlane {
+                stride: w,
+                data: yp,
+            },
+            VideoPlane {
+                stride: cw,
+                data: up,
+            },
+            VideoPlane {
+                stride: cw,
+                data: vp,
+            },
         ],
     ))
 }
@@ -546,9 +776,18 @@ fn rescale_range(
         src,
         dst_format,
         vec![
-            VideoPlane { stride: w, data: yp },
-            VideoPlane { stride: cw, data: up },
-            VideoPlane { stride: cw, data: vp },
+            VideoPlane {
+                stride: w,
+                data: yp,
+            },
+            VideoPlane {
+                stride: cw,
+                data: up,
+            },
+            VideoPlane {
+                stride: cw,
+                data: vp,
+            },
         ],
     ))
 }
@@ -574,9 +813,18 @@ fn nv_to_yuv420p(src: &VideoFrame, dst_format: PixelFormat, is_nv12: bool) -> Re
         src,
         dst_format,
         vec![
-            VideoPlane { stride: w, data: yp },
-            VideoPlane { stride: cw, data: up },
-            VideoPlane { stride: cw, data: vp },
+            VideoPlane {
+                stride: w,
+                data: yp,
+            },
+            VideoPlane {
+                stride: cw,
+                data: up,
+            },
+            VideoPlane {
+                stride: cw,
+                data: vp,
+            },
         ],
     ))
 }
@@ -602,7 +850,10 @@ fn yuv420p_to_nv(src: &VideoFrame, dst_format: PixelFormat, is_nv12: bool) -> Re
         src,
         dst_format,
         vec![
-            VideoPlane { stride: w, data: yp },
+            VideoPlane {
+                stride: w,
+                data: yp,
+            },
             VideoPlane {
                 stride: cw * 2,
                 data: uv,
@@ -682,6 +933,9 @@ fn rgb_to_pal8(
     Ok(make_frame(
         src,
         dst_format,
-        vec![VideoPlane { stride: w, data: out }],
+        vec![VideoPlane {
+            stride: w,
+            data: out,
+        }],
     ))
 }

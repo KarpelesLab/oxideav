@@ -95,11 +95,7 @@ impl LpcPredictor {
     /// vector, producing 5 reconstructed speech samples. Both
     /// `history` (short delay line) and `synth_history` (the
     /// autocorrelation-analysis window) are advanced by the output.
-    pub fn synthesise(
-        &mut self,
-        excitation: &[f32; VECTOR_SIZE],
-        out: &mut [f32; VECTOR_SIZE],
-    ) {
+    pub fn synthesise(&mut self, excitation: &[f32; VECTOR_SIZE], out: &mut [f32; VECTOR_SIZE]) {
         for n in 0..VECTOR_SIZE {
             let mut acc = excitation[n];
             for k in 1..=LPC_ORDER {
@@ -549,6 +545,9 @@ mod tests {
             }
         }
         // Output should stay bounded — much less than i16 full-scale.
-        assert!(max_abs < 1.0e4, "constant-excitation output grew to {max_abs}");
+        assert!(
+            max_abs < 1.0e4,
+            "constant-excitation output grew to {max_abs}"
+        );
     }
 }

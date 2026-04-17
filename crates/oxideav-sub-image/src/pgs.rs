@@ -41,9 +41,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, SeekFrom};
 
 use oxideav_codec::Decoder;
-use oxideav_container::{
-    ContainerRegistry, Demuxer, ProbeData, ProbeScore, ReadSeek,
-};
+use oxideav_container::{ContainerRegistry, Demuxer, ProbeData, ProbeScore, ReadSeek};
 use oxideav_core::{
     CodecId, CodecParameters, Error, Frame, MediaType, Packet, PixelFormat, Result, StreamInfo,
     TimeBase, VideoFrame, VideoPlane,
@@ -79,18 +77,8 @@ pub fn read_segment(buf: &[u8], pos: usize) -> Result<(RawSegment, usize)> {
     if &buf[pos..pos + 2] != b"PG" {
         return Err(Error::invalid("PGS: segment missing 'PG' magic"));
     }
-    let pts_90k = u32::from_be_bytes([
-        buf[pos + 2],
-        buf[pos + 3],
-        buf[pos + 4],
-        buf[pos + 5],
-    ]);
-    let dts_90k = u32::from_be_bytes([
-        buf[pos + 6],
-        buf[pos + 7],
-        buf[pos + 8],
-        buf[pos + 9],
-    ]);
+    let pts_90k = u32::from_be_bytes([buf[pos + 2], buf[pos + 3], buf[pos + 4], buf[pos + 5]]);
+    let dts_90k = u32::from_be_bytes([buf[pos + 6], buf[pos + 7], buf[pos + 8], buf[pos + 9]]);
     let seg_type = buf[pos + 10];
     let size = u16::from_be_bytes([buf[pos + 11], buf[pos + 12]]) as usize;
     let end = pos + 13 + size;
@@ -156,9 +144,7 @@ fn parse_pcs(body: &[u8]) -> Result<PresentationComposition> {
         cur += 8;
         if cropped {
             if cur + 8 > body.len() {
-                return Err(Error::invalid(
-                    "PGS PCS: cropped object missing crop rect",
-                ));
+                return Err(Error::invalid("PGS PCS: cropped object missing crop rect"));
             }
             cur += 8;
         }
@@ -330,9 +316,7 @@ pub fn decode_rle(rle: &[u8], width: usize, height: usize) -> Result<Vec<u8>> {
                     0x00 => (len_lo, 0u8),
                     0x40 => {
                         if i >= rle.len() {
-                            return Err(Error::invalid(
-                                "PGS RLE: truncated 14-bit length",
-                            ));
+                            return Err(Error::invalid("PGS RLE: truncated 14-bit length"));
                         }
                         let b2 = rle[i] as usize;
                         i += 1;
@@ -348,9 +332,7 @@ pub fn decode_rle(rle: &[u8], width: usize, height: usize) -> Result<Vec<u8>> {
                     }
                     _ => {
                         if i + 1 >= rle.len() {
-                            return Err(Error::invalid(
-                                "PGS RLE: truncated 14-bit+colour run",
-                            ));
+                            return Err(Error::invalid("PGS RLE: truncated 14-bit+colour run"));
                         }
                         let b2 = rle[i] as usize;
                         let c = rle[i + 1];
@@ -632,9 +614,9 @@ impl Decoder for PgsDecoder {
         };
         let width = pcs.width as u32;
         let height = pcs.height as u32;
-        let rendered = ds.render()?.unwrap_or_else(|| {
-            vec![0u8; (width as usize) * (height as usize) * 4]
-        });
+        let rendered = ds
+            .render()?
+            .unwrap_or_else(|| vec![0u8; (width as usize) * (height as usize) * 4]);
         let frame = VideoFrame {
             format: PixelFormat::Rgba,
             width,
@@ -729,10 +711,8 @@ pub fn build_demo_display_set(
         let g = rgba[1] as i32;
         let b = rgba[2] as i32;
         let y = ((77 * r + 150 * g + 29 * b + 128) >> 8) as u8;
-        let cb = (((-43 * r - 84 * g + 127 * b + 128) >> 8) + 128)
-            .clamp(0, 255) as u8;
-        let cr = (((127 * r - 106 * g - 21 * b + 128) >> 8) + 128)
-            .clamp(0, 255) as u8;
+        let cb = (((-43 * r - 84 * g + 127 * b + 128) >> 8) + 128).clamp(0, 255) as u8;
+        let cr = (((127 * r - 106 * g - 21 * b + 128) >> 8) + 128).clamp(0, 255) as u8;
         pds.push(*idx);
         pds.push(y);
         pds.push(cr);
@@ -801,13 +781,7 @@ mod tests {
             (2u8, [0u8, 255, 0, 255]),
             (3u8, [0u8, 0, 255, 255]),
         ];
-        let blob = build_demo_display_set(
-            (2, 2),
-            (2, 2),
-            (0, 0),
-            &palette,
-            &pixels,
-        );
+        let blob = build_demo_display_set((2, 2), (2, 2), (0, 0), &palette, &pixels);
 
         let mut dec = make_decoder(&CodecParameters::video(CodecId::new(PGS_CODEC_ID))).unwrap();
         let pkt = Packet::new(0, TimeBase::new(1, 90_000), blob).with_pts(0);
@@ -825,12 +799,28 @@ mod tests {
         // check R dominance + opaque alpha rather than exact bytes.
         let r0c0 = &data[0..4];
         let r0c1 = &data[4..8];
-        assert!(r0c0[0] > 200 && r0c0[3] == 255, "not red-dominant: {:?}", r0c0);
-        assert!(r0c1[0] > 200 && r0c1[3] == 255, "not red-dominant: {:?}", r0c1);
+        assert!(
+            r0c0[0] > 200 && r0c0[3] == 255,
+            "not red-dominant: {:?}",
+            r0c0
+        );
+        assert!(
+            r0c1[0] > 200 && r0c1[3] == 255,
+            "not red-dominant: {:?}",
+            r0c1
+        );
         // Row 1: green, blue — same dominance check.
         let g = &data[8..12];
         let b = &data[12..16];
-        assert!(g[1] > g[0] && g[1] > g[2], "green pixel not dominant: {:?}", g);
-        assert!(b[2] > b[0] && b[2] > b[1], "blue pixel not dominant: {:?}", b);
+        assert!(
+            g[1] > g[0] && g[1] > g[2],
+            "green pixel not dominant: {:?}",
+            g
+        );
+        assert!(
+            b[2] > b[0] && b[2] > b[1],
+            "blue pixel not dominant: {:?}",
+            b
+        );
     }
 }

@@ -267,10 +267,16 @@ fn apply_css_prop(style: &mut SubtitleStyle, key: &str, val: &str) {
             }
         }
         "font-family" => {
-            style.font_family = Some(val.trim_matches(|c: char| c == '"' || c == '\'').to_string());
+            style.font_family = Some(
+                val.trim_matches(|c: char| c == '"' || c == '\'')
+                    .to_string(),
+            );
         }
         "font-size" => {
-            let num: String = val.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let num: String = val
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
             if let Ok(v) = num.parse::<f32>() {
                 style.font_size = Some(v);
             }
@@ -309,7 +315,10 @@ fn parse_region_block(lines: &[&str]) -> Option<SubtitleStyle> {
             match k.as_str() {
                 "id" => id = v.to_string(),
                 "width" => {
-                    let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    let num: String = v
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
                     width = num.parse::<f32>().ok();
                 }
                 _ => {}
@@ -381,15 +390,24 @@ fn parse_timing_and_settings(line: &str) -> Option<(i64, i64, Option<CuePosition
         let cp = pos.get_or_insert_with(CuePosition::default);
         match k_lc.as_str() {
             "line" => {
-                let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                let num: String = v
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
                 cp.y = num.parse::<f32>().ok();
             }
             "position" => {
-                let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                let num: String = v
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
                 cp.x = num.parse::<f32>().ok();
             }
             "size" => {
-                let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                let num: String = v
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
                 cp.size = num.parse::<f32>().ok();
             }
             "align" => {
@@ -422,7 +440,11 @@ fn parse_vtt_timestamp(s: &str) -> Option<i64> {
             parts[1].parse::<u32>().ok()?,
             parts[2].parse::<u32>().ok()?,
         ),
-        2 => (0u32, parts[0].parse::<u32>().ok()?, parts[1].parse::<u32>().ok()?),
+        2 => (
+            0u32,
+            parts[0].parse::<u32>().ok()?,
+            parts[1].parse::<u32>().ok()?,
+        ),
         _ => return None,
     };
     let ms_val: u32 = if ms.is_empty() { 0 } else { ms.parse().ok()? };
@@ -476,10 +498,7 @@ fn format_timing_line(cue: &SubtitleCue) -> String {
 // WebVTT inline parser.
 
 fn parse_vtt_inline(body: &str) -> Vec<Segment> {
-    let mut p = VttParser {
-        src: body,
-        pos: 0,
-    };
+    let mut p = VttParser { src: body, pos: 0 };
     p.parse_until(None)
 }
 

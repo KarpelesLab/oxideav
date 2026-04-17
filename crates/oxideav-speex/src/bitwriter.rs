@@ -89,13 +89,7 @@ mod tests {
     #[test]
     fn round_trip_via_bitreader() {
         let mut bw = BitWriter::new();
-        let payload = [
-            (0xA, 4u32),
-            (0x5, 4),
-            (0xC3, 8),
-            (0b101, 3),
-            (0x1FFFF, 17),
-        ];
+        let payload = [(0xA, 4u32), (0x5, 4), (0xC3, 8), (0b101, 3), (0x1FFFF, 17)];
         for (v, n) in payload {
             bw.write_bits(v, n);
         }

@@ -141,10 +141,7 @@ pub fn bandwidth_expand(a: &mut [f32], gamma: f32) {
 /// Update an LPC coefficient vector `a[0..=LPC_ORDER]` from the recent
 /// synthesis history. On numerical failure the existing `a` is left
 /// unchanged and `false` is returned.
-pub fn update_lpc_from_history(
-    a: &mut [f32; LPC_ORDER + 1],
-    history: &[f32; HISTORY_LEN],
-) -> bool {
+pub fn update_lpc_from_history(a: &mut [f32; LPC_ORDER + 1], history: &[f32; HISTORY_LEN]) -> bool {
     let r = autocorrelation::<HISTORY_LEN>(history, LPC_ORDER);
     // Add a tiny white-noise floor to r[0] to keep the recursion robust
     // when the decoder has produced very quiet output (all zeros in the
@@ -200,11 +197,7 @@ mod tests {
         assert!((a[0] - 1.0).abs() < 1e-6);
         // Our convention: y[n] = x[n] - sum(a[k] y[n-k]). So for the
         // given model we want a[1] = -0.8.
-        assert!(
-            (a[1] + 0.8).abs() < 1e-3,
-            "a[1] = {} expected ≈ -0.8",
-            a[1]
-        );
+        assert!((a[1] + 0.8).abs() < 1e-3, "a[1] = {} expected ≈ -0.8", a[1]);
     }
 
     #[test]

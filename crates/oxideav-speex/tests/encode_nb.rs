@@ -152,7 +152,8 @@ fn encode_decode_zero_input_stays_quiet() {
     params.channels = Some(1);
     params.sample_format = Some(SampleFormat::S16);
     let mut enc = make_encoder(&params).expect("speex encoder");
-    enc.send_frame(&Frame::Audio(audio_frame_s16(&input))).unwrap();
+    enc.send_frame(&Frame::Audio(audio_frame_s16(&input)))
+        .unwrap();
     enc.flush().unwrap();
     let mut packets = Vec::new();
     loop {

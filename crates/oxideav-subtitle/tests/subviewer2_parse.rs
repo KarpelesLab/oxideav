@@ -44,8 +44,14 @@ fn five_cues() {
 #[test]
 fn parses_metadata() {
     let t = subviewer2::parse(SAMPLE.as_bytes()).unwrap();
-    assert!(t.metadata.iter().any(|(k, v)| k == "title" && v == "Example Show"));
-    assert!(t.metadata.iter().any(|(k, v)| k == "author" && v == "Anonymous"));
+    assert!(t
+        .metadata
+        .iter()
+        .any(|(k, v)| k == "title" && v == "Example Show"));
+    assert!(t
+        .metadata
+        .iter()
+        .any(|(k, v)| k == "author" && v == "Anonymous"));
     assert!(t.metadata.iter().any(|(k, v)| k == "source" && v == "Test"));
 }
 

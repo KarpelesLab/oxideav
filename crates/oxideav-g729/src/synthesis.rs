@@ -238,8 +238,7 @@ pub fn adaptive_codebook_excitation(
     for n in 0..SUBFRAME_SAMPLES {
         let mut acc = 0.0f32;
         for k in 0..INTERP_FIR_LEN {
-            let idx = EXC_HIST as isize - t_int as isize + n as isize
-                - INTERP_CENTRE as isize
+            let idx = EXC_HIST as isize - t_int as isize + n as isize - INTERP_CENTRE as isize
                 + k as isize;
             let sample = if idx >= 0 && (idx as usize) < EXC_HIST {
                 exc[idx as usize]
@@ -271,11 +270,7 @@ pub fn adaptive_codebook_excitation(
 /// Signs: one bit per pulse, MSB = track 0 sign.
 ///
 /// The output vector has values `+1`, `-1`, or `0` at each sample.
-pub fn fixed_codebook_excitation(
-    c: u16,
-    s: u8,
-    out: &mut [f32; SUBFRAME_SAMPLES],
-) {
+pub fn fixed_codebook_excitation(c: u16, s: u8, out: &mut [f32; SUBFRAME_SAMPLES]) {
     out.fill(0.0);
     let c = c as u32;
     // Extract per-track position indices.

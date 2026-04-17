@@ -25,18 +25,14 @@ pub struct NodeId(pub usize);
 pub enum DagNode {
     /// Open a demuxer from a source URI. Emits packets stream-by-stream;
     /// downstream `Select` nodes filter.
-    Demuxer {
-        source: String,
-    },
+    Demuxer { source: String },
     /// Constrain upstream streams to those matching `selector`.
     Select {
         upstream: NodeId,
         selector: ResolvedSelector,
     },
     /// Decode packets to frames.
-    Decode {
-        upstream: NodeId,
-    },
+    Decode { upstream: NodeId },
     /// Apply a filter to frames.
     Filter {
         upstream: NodeId,
@@ -269,9 +265,8 @@ impl Job {
             }
             TrackInput::Convert(c) => {
                 let upstream = self.build_input(dag, ctx, c.input.as_ref(), selector)?;
-                let target = parse_pixel_format(&c.convert).map_err(|e| {
-                    Error::invalid(format!("job: {ctx}: convert: {e}"))
-                })?;
+                let target = parse_pixel_format(&c.convert)
+                    .map_err(|e| Error::invalid(format!("job: {ctx}: convert: {e}")))?;
                 // Convert consumes frames; insert a Decode if the upstream
                 // is still packet-producing.
                 let frame_upstream = if self.is_packet_producing(dag, upstream)? {

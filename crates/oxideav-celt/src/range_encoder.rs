@@ -165,7 +165,11 @@ impl RangeEncoder {
     /// `icdf[..]` (same semantics as `decode_icdf`).
     pub fn encode_icdf(&mut self, s: usize, icdf: &[u8], ftb: u32) {
         let r = self.rng >> ftb;
-        let fh = if s > 0 { icdf[s - 1] as u32 } else { 1u32 << ftb };
+        let fh = if s > 0 {
+            icdf[s - 1] as u32
+        } else {
+            1u32 << ftb
+        };
         let fl = icdf[s] as u32;
         // Match the decoder walk: at step k, `s := r * icdf[k]`; it halts
         // when d >= s, so the winning symbol's range is
@@ -174,7 +178,9 @@ impl RangeEncoder {
         // toward 0 is `fh = icdf[s-1]` and the "outer" is `fl = icdf[s]`.
         if s > 0 {
             // val += rng - r * fh; rng = r * (fh - fl)
-            self.val = self.val.wrapping_add(self.rng.wrapping_sub(r.wrapping_mul(fh)));
+            self.val = self
+                .val
+                .wrapping_add(self.rng.wrapping_sub(r.wrapping_mul(fh)));
             self.rng = r.wrapping_mul(fh - fl);
         } else {
             self.rng = self.rng.wrapping_sub(r.wrapping_mul(fl));

@@ -15,8 +15,8 @@
 //!   3. PTS values on the produced packets rise monotonically.
 //!   4. `register` exposes both decode and encode factories.
 
-use oxideav_codec::{Decoder, Encoder};
 use oxideav_codec::CodecRegistry;
+use oxideav_codec::{Decoder, Encoder};
 use oxideav_core::{
     AudioFrame, CodecId, CodecParameters, Error, Frame, Packet, SampleFormat, TimeBase,
 };
@@ -228,10 +228,7 @@ fn packet_pts_rises_across_vectors() {
     for p in &packets {
         let pts = p.pts.expect("encoder must stamp pts on every packet");
         if let Some(prev) = prev {
-            assert!(
-                pts > prev,
-                "pts went backwards: {prev} then {pts}"
-            );
+            assert!(pts > prev, "pts went backwards: {prev} then {pts}");
             assert_eq!(
                 pts - prev,
                 PACKET_SAMPLES as i64,

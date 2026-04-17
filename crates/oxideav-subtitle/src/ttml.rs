@@ -28,8 +28,7 @@ pub const CODEC_ID: &str = "ttml";
 pub fn parse(bytes: &[u8]) -> Result<SubtitleTrack> {
     let text = decode_utf8_lossy_stripping_bom(bytes);
     let nodes = parse_xml(&text)?;
-    let tt = find_element(&nodes, "tt")
-        .ok_or_else(|| Error::invalid("TTML: missing <tt> root"))?;
+    let tt = find_element(&nodes, "tt").ok_or_else(|| Error::invalid("TTML: missing <tt> root"))?;
 
     let mut track = SubtitleTrack {
         source: Some(SourceFormat::Srt), // closest stable enum — rewritten below
@@ -265,8 +264,11 @@ fn wrap_with_style(el: &Element, mut children: Vec<Segment>) -> Segment {
     let deco = attr(el, "tts:textDecoration").unwrap_or_default();
     let color = attr(el, "tts:color");
     let fam = attr(el, "tts:fontFamily");
-    let sz = attr(el, "tts:fontSize")
-        .and_then(|v| v.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.').parse::<f32>().ok());
+    let sz = attr(el, "tts:fontSize").and_then(|v| {
+        v.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
+            .parse::<f32>()
+            .ok()
+    });
 
     if weight.eq_ignore_ascii_case("bold") {
         children = vec![Segment::Bold(children)];
@@ -426,8 +428,7 @@ pub(crate) fn cue_to_bytes(cue: &SubtitleCue) -> Vec<u8> {
 pub(crate) fn bytes_to_cue(bytes: &[u8]) -> Result<SubtitleCue> {
     let text = decode_utf8_lossy_stripping_bom(bytes);
     let nodes = parse_xml(&text)?;
-    let p = find_element(&nodes, "p")
-        .ok_or_else(|| Error::invalid("TTML cue: missing <p>"))?;
+    let p = find_element(&nodes, "p").ok_or_else(|| Error::invalid("TTML cue: missing <p>"))?;
     let start_us = attr(p, "begin")
         .and_then(|v| parse_ttml_time(&v))
         .unwrap_or(0);
@@ -559,7 +560,12 @@ fn parse_ttml_color_rgba(s: &str) -> Option<(u8, u8, u8, u8)> {
     if let Some(rest) = s.strip_prefix("rgb(").and_then(|r| r.strip_suffix(')')) {
         let p: Vec<&str> = rest.split(',').map(|v| v.trim()).collect();
         if p.len() == 3 {
-            return Some((p[0].parse().ok()?, p[1].parse().ok()?, p[2].parse().ok()?, 255));
+            return Some((
+                p[0].parse().ok()?,
+                p[1].parse().ok()?,
+                p[2].parse().ok()?,
+                255,
+            ));
         }
     }
     named(s)
@@ -623,7 +629,9 @@ struct XmlParser<'a> {
 
 impl<'a> XmlParser<'a> {
     fn skip_ws(&mut self) {
-        while self.pos < self.src.len() && matches!(self.src[self.pos], b' ' | b'\t' | b'\n' | b'\r') {
+        while self.pos < self.src.len()
+            && matches!(self.src[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+        {
             self.pos += 1;
         }
     }
@@ -642,7 +650,9 @@ impl<'a> XmlParser<'a> {
                     .map(|e| e + 3)
                     .unwrap_or(self.src.len());
                 self.pos = end;
-            } else if self.src[self.pos..].starts_with(b"<!DOCTYPE") || self.src[self.pos..].starts_with(b"<!") {
+            } else if self.src[self.pos..].starts_with(b"<!DOCTYPE")
+                || self.src[self.pos..].starts_with(b"<!")
+            {
                 // Ignore DOCTYPE up to matching >.
                 let end = find_seq(self.src, self.pos, b">")
                     .map(|e| e + 1)
@@ -707,7 +717,10 @@ impl<'a> XmlParser<'a> {
         // Read name.
         let name_start = self.pos;
         while self.pos < self.src.len()
-            && !matches!(self.src[self.pos], b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/')
+            && !matches!(
+                self.src[self.pos],
+                b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/'
+            )
         {
             self.pos += 1;
         }
@@ -726,7 +739,11 @@ impl<'a> XmlParser<'a> {
                 self.pos += 1;
                 // Parse children until matching close.
                 let children = self.parse_children(&name)?;
-                return Ok(Element { name, attrs, children });
+                return Ok(Element {
+                    name,
+                    attrs,
+                    children,
+                });
             }
             if b == b'/' {
                 // Self-closing.

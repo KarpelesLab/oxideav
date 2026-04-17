@@ -220,12 +220,22 @@ fn extract_palette(v: &VideoFrame) -> Result<Vec<[u8; 4]>> {
     let n = p.data.len() / 4;
     let mut out = Vec::with_capacity(n.min(256));
     for i in 0..n.min(256) {
-        out.push([p.data[i * 4], p.data[i * 4 + 1], p.data[i * 4 + 2], p.data[i * 4 + 3]]);
+        out.push([
+            p.data[i * 4],
+            p.data[i * 4 + 1],
+            p.data[i * 4 + 2],
+            p.data[i * 4 + 3],
+        ]);
     }
     // Trim trailing zero-alpha entries to shrink the effective palette
     // if the caller padded. We keep at least 2 entries to stay within
     // LZW's minimum code-size range.
-    while out.len() > 2 && out.last().map(|c| c[3] == 0xFF && c[0] == 0 && c[1] == 0 && c[2] == 0).unwrap_or(false) {
+    while out.len() > 2
+        && out
+            .last()
+            .map(|c| c[3] == 0xFF && c[0] == 0 && c[1] == 0 && c[2] == 0)
+            .unwrap_or(false)
+    {
         // But don't aggressively strip — palette entries can legitimately
         // be black. Only trim if the caller provided an obvious sentinel
         // block of pure zeros. Conservative approach: stop trimming.

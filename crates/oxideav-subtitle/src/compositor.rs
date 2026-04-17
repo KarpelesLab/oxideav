@@ -108,7 +108,11 @@ impl Compositor {
         let last_baseline = last_baseline as i32;
 
         // Honour cue-level alignment. Default: Center.
-        let align = cue.positioning.as_ref().map(|p| p.align).unwrap_or(TextAlign::Center);
+        let align = cue
+            .positioning
+            .as_ref()
+            .map(|p| p.align)
+            .unwrap_or(TextAlign::Center);
 
         // 4. Blit each line.
         let n_lines = lines.len();
@@ -456,9 +460,7 @@ fn tokenise(runs: &[Run]) -> Vec<Token> {
 fn visible_cols(s: &str) -> usize {
     // Each char is one cell (fixed-width bitmap font). Tabs count as 1
     // for now; control chars count as 0.
-    s.chars()
-        .filter(|c| !c.is_control() || *c == '\t')
-        .count()
+    s.chars().filter(|c| !c.is_control() || *c == '\t').count()
 }
 
 fn hard_break(s: &str, max_cols: usize) -> Vec<String> {

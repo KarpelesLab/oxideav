@@ -191,11 +191,7 @@ pub fn decode_lsp(
 
 /// Linear interpolation between two LSP vectors in the cosine domain.
 /// `alpha = 0` -> `a`, `alpha = 1` -> `b`.
-pub fn interpolate_lsp(
-    a: &[f32; LPC_ORDER],
-    b: &[f32; LPC_ORDER],
-    alpha: f32,
-) -> [f32; LPC_ORDER] {
+pub fn interpolate_lsp(a: &[f32; LPC_ORDER], b: &[f32; LPC_ORDER], alpha: f32) -> [f32; LPC_ORDER] {
     let mut out = [0.0f32; LPC_ORDER];
     for j in 0..LPC_ORDER {
         out[j] = (1.0 - alpha) * a[j] + alpha * b[j];

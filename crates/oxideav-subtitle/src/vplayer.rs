@@ -228,10 +228,9 @@ fn append_flat(segs: &[Segment], out: &mut String) {
         match seg {
             Segment::Text(s) => out.push_str(&s.replace('|', "/")),
             Segment::LineBreak => out.push('|'),
-            Segment::Bold(c)
-            | Segment::Italic(c)
-            | Segment::Underline(c)
-            | Segment::Strike(c) => append_flat(c, out),
+            Segment::Bold(c) | Segment::Italic(c) | Segment::Underline(c) | Segment::Strike(c) => {
+                append_flat(c, out)
+            }
             Segment::Color { children, .. }
             | Segment::Font { children, .. }
             | Segment::Voice { children, .. }
