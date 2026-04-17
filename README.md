@@ -60,6 +60,42 @@ and container matrix actually compiled into the release binary.
 - **Muxer** — writes Packets into an output container.
 - **Pipeline** — connects these pieces. A pipeline can pass Packets straight from Demuxer to Muxer (remux, no quality loss) or route through Decoder → [Filter] → Encoder.
 
+## Using a codec directly (no containers, no pipeline)
+
+Every codec crate in OxideAV is designed to be usable on its own.
+Pull only `oxideav-core` (types), `oxideav-codec` (trait + registry),
+and the codec itself:
+
+```toml
+[dependencies]
+oxideav-core = "0.0"
+oxideav-codec = "0.0"
+oxideav-g711 = "0.0"   # or any other codec crate
+```
+
+```rust
+use oxideav_codec::CodecRegistry;
+use oxideav_core::{CodecId, CodecParameters, Frame, Packet, TimeBase};
+
+let mut reg = CodecRegistry::new();
+oxideav_g711::register(&mut reg);
+
+let mut params = CodecParameters::audio(CodecId::new("pcm_mulaw"));
+params.sample_rate = Some(8_000);
+params.channels = Some(1);
+
+let mut dec = reg.make_decoder(&params)?;
+dec.send_packet(&Packet::new(0, TimeBase::new(1, 8_000), ulaw_bytes))?;
+let Frame::Audio(a) = dec.receive_frame()? else { unreachable!() };
+// `a.data[0]` is S16 PCM.
+```
+
+The canonical walkthrough of the `send_packet` / `receive_frame` /
+`flush` / `reset` loop lives in
+[oxideav-codec's README](https://github.com/OxideAV/oxideav-codec).
+Each codec crate's README has a concrete example tailored to its
+payload shape.
+
 ## Current status
 
 `oxideav list` (via the CLI) prints the live, build-time-accurate
