@@ -50,7 +50,10 @@
 #![allow(clippy::ptr_arg)]
 
 pub mod bool_decoder;
+pub mod bool_encoder;
 pub mod decoder;
+pub mod encoder;
+pub mod fdct;
 pub mod frame_header;
 pub mod frame_tag;
 pub mod inter;
@@ -62,7 +65,7 @@ pub mod tables;
 pub mod tokens;
 pub mod transform;
 
-use oxideav_codec::{CodecRegistry, Decoder};
+use oxideav_codec::{CodecRegistry, Decoder, Encoder};
 use oxideav_container::ContainerRegistry;
 use oxideav_core::{CodecCapabilities, CodecId, CodecParameters, Result};
 
@@ -74,7 +77,12 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
         .with_lossy(true)
         .with_intra_only(false)
         .with_max_size(16384, 16384);
-    reg.register_decoder_impl(cid, caps, make_decoder);
+    reg.register_decoder_impl(cid.clone(), caps, make_decoder);
+    let enc_caps = CodecCapabilities::video("vp8_sw_enc")
+        .with_lossy(true)
+        .with_intra_only(true)
+        .with_max_size(16383, 16383);
+    reg.register_encoder_impl(cid, enc_caps, make_encoder);
 }
 
 pub fn register_containers(reg: &mut ContainerRegistry) {
@@ -83,6 +91,10 @@ pub fn register_containers(reg: &mut ContainerRegistry) {
 
 fn make_decoder(params: &CodecParameters) -> Result<Box<dyn Decoder>> {
     decoder::make_decoder(params)
+}
+
+fn make_encoder(params: &CodecParameters) -> Result<Box<dyn Encoder>> {
+    encoder::make_encoder(params)
 }
 
 /// Combined registration for callers that just want everything.
