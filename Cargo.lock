@@ -391,6 +391,8 @@ dependencies = [
  "oxideav-core",
  "oxideav-ffv1",
  "oxideav-flac",
+ "oxideav-g711",
+ "oxideav-g722",
  "oxideav-g7231",
  "oxideav-g728",
  "oxideav-g729",
@@ -549,6 +551,14 @@ dependencies = [
 
 [[package]]
 name = "oxideav-g711"
+version = "0.0.1"
+dependencies = [
+ "oxideav-codec",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-g722"
 version = "0.0.1"
 dependencies = [
  "oxideav-codec",

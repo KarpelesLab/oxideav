@@ -31,6 +31,8 @@ default = [
     "theora",
     "aac",
     "celt",
+    "g711",
+    "g722",
     "g7231",
     "g728",
     "g729",
@@ -79,6 +81,8 @@ mpeg4video = ["dep:oxideav-mpeg4video"]
 theora = ["dep:oxideav-theora"]
 aac = ["dep:oxideav-aac"]
 celt = ["dep:oxideav-celt"]
+g711 = ["dep:oxideav-g711"]
+g722 = ["dep:oxideav-g722"]
 g7231 = ["dep:oxideav-g7231"]
 g728 = ["dep:oxideav-g728"]
 g729 = ["dep:oxideav-g729"]
@@ -135,6 +139,8 @@ oxideav-mpeg4video = { workspace = true, optional = true }
 oxideav-theora = { workspace = true, optional = true }
 oxideav-aac = { workspace = true, optional = true }
 oxideav-celt = { workspace = true, optional = true }
+oxideav-g711 = { workspace = true, optional = true }
+oxideav-g722 = { workspace = true, optional = true }
 oxideav-g7231 = { workspace = true, optional = true }
 oxideav-g728 = { workspace = true, optional = true }
 oxideav-g729 = { workspace = true, optional = true }

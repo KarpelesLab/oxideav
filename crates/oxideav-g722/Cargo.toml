@@ -1,0 +1,13 @@
+[package]
+name = "oxideav-g722"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure-Rust ITU-T G.722 (64 kbit/s) wideband sub-band ADPCM codec"
+
+[dependencies]
+oxideav-core = { workspace = true }
+oxideav-codec = { workspace = true }

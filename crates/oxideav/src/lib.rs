@@ -46,6 +46,10 @@ pub use oxideav_celt as celt;
 pub use oxideav_ffv1 as ffv1;
 #[cfg(feature = "flac")]
 pub use oxideav_flac as flac;
+#[cfg(feature = "g711")]
+pub use oxideav_g711 as g711;
+#[cfg(feature = "g722")]
+pub use oxideav_g722 as g722;
 #[cfg(feature = "g7231")]
 pub use oxideav_g7231 as g7231;
 #[cfg(feature = "g728")]
@@ -196,6 +200,14 @@ impl Registries {
         #[cfg(feature = "celt")]
         {
             oxideav_celt::register(&mut codecs);
+        }
+        #[cfg(feature = "g711")]
+        {
+            oxideav_g711::register(&mut codecs);
+        }
+        #[cfg(feature = "g722")]
+        {
+            oxideav_g722::register(&mut codecs);
         }
         #[cfg(feature = "g7231")]
         {
