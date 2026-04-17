@@ -429,6 +429,29 @@ The `oxideav` binary is produced by the `oxideav-cli` crate:
 cargo run -p oxideav-cli -- --help
 ```
 
+### Working with extracted sibling crates
+
+A handful of fully-spec-complete codecs have been extracted into their
+own repositories under the
+[OxideAV organization](https://github.com/OxideAV) and are consumed from
+crates.io. To hack on them locally alongside this repo, clone them as
+siblings and run `scripts/dev-patch.sh`:
+
+```
+# layout: parent/
+#         ├── oxideav/           (this repo)
+#         └── oxideav-<name>/    (any OxideAV/oxideav-* clone)
+git clone git@github.com:OxideAV/oxideav-gsm.git ../oxideav-gsm
+./scripts/dev-patch.sh           # generates .cargo/config.toml
+cargo run -p oxideplay -- some.wav
+```
+
+`scripts/dev-patch.sh` rewrites `.cargo/config.toml` with a
+`[patch.crates-io]` entry for every `../oxideav-*` sibling it finds,
+plus every in-workspace `crates/oxideav-*` crate. The file is
+gitignored, so each dev owns their own layout. Re-run the script after
+adding or removing a sibling.
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE). Copyright © 2026 Karpelès Lab Inc.
