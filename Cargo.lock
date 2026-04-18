@@ -414,7 +414,7 @@ dependencies = [
  "oxideav-mp2",
  "oxideav-mp3",
  "oxideav-mp4",
- "oxideav-mpeg1video",
+ "oxideav-mpeg12video",
  "oxideav-mpeg4video",
  "oxideav-ogg",
  "oxideav-opus",
@@ -491,6 +491,7 @@ dependencies = [
 name = "oxideav-avif"
 version = "0.0.3"
 dependencies = [
+ "oxideav-av1",
  "oxideav-codec",
  "oxideav-core",
 ]
@@ -552,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "oxideav-flac"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "oxideav-codec",
  "oxideav-container",
@@ -765,7 +766,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-mpeg1video"
+name = "oxideav-mpeg12video"
 version = "0.0.3"
 dependencies = [
  "oxideav-codec",
@@ -809,14 +810,14 @@ dependencies = [
 
 [[package]]
 name = "oxideav-pixfmt"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "oxideav-core",
 ]
 
 [[package]]
 name = "oxideav-png"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "miniz_oxide 0.7.4",
  "oxideav-codec",

@@ -83,7 +83,7 @@ pub use oxideav_mp3 as mp3;
 #[cfg(feature = "mp4")]
 pub use oxideav_mp4 as mp4;
 #[cfg(feature = "mpeg1video")]
-pub use oxideav_mpeg1video as mpeg1video;
+pub use oxideav_mpeg12video as mpeg12video;
 #[cfg(feature = "mpeg4video")]
 pub use oxideav_mpeg4video as mpeg4video;
 #[cfg(feature = "ogg")]
@@ -197,7 +197,7 @@ impl Registries {
         }
         #[cfg(feature = "mpeg1video")]
         {
-            oxideav_mpeg1video::register(&mut codecs);
+            oxideav_mpeg12video::register(&mut codecs);
         }
         #[cfg(feature = "aac")]
         {

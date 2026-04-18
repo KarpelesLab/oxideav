@@ -32,6 +32,7 @@ default = [
     "mp3",
     "mjpeg",
     "mpeg1video",
+    "mpeg2video",
     "mpeg4video",
     "theora",
     "aac",
@@ -84,7 +85,11 @@ mp1 = ["dep:oxideav-mp1"]
 mp2 = ["dep:oxideav-mp2"]
 mp3 = ["dep:oxideav-mp3"]
 mjpeg = ["dep:oxideav-mjpeg"]
-mpeg1video = ["dep:oxideav-mpeg1video"]
+mpeg1video = ["dep:oxideav-mpeg12video"]
+# MPEG-2 video (H.262) is served by the same crate (`oxideav-mpeg12video`)
+# as MPEG-1 video; this feature is a cosmetic alias so downstream users can
+# request `mpeg2video` without caring about the internal crate layout.
+mpeg2video = ["mpeg1video"]
 mpeg4video = ["dep:oxideav-mpeg4video"]
 theora = ["dep:oxideav-theora"]
 aac = ["dep:oxideav-aac"]
@@ -145,7 +150,7 @@ oxideav-mp1 = { workspace = true, optional = true }
 oxideav-mp2 = { workspace = true, optional = true }
 oxideav-mp3 = { workspace = true, optional = true }
 oxideav-mjpeg = { workspace = true, optional = true }
-oxideav-mpeg1video = { workspace = true, optional = true }
+oxideav-mpeg12video = { workspace = true, optional = true }
 oxideav-mpeg4video = { workspace = true, optional = true }
 oxideav-theora = { workspace = true, optional = true }
 oxideav-aac = { workspace = true, optional = true }
