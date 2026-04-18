@@ -29,6 +29,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Clone every OxideAV/oxideav-* repo into crates/ so the workspace
+      # resolves entirely from local paths — no crates.io round-trips for
+      # any oxideav-* dep (see scripts/clone-siblings.sh + [patch.crates-io]
+      # in the root Cargo.toml).
+      - name: Clone sibling oxideav-* crates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/clone-siblings.sh
+
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
@@ -51,6 +61,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      # The workspace globs `crates/*`, so the sibling clones must be in
+      # place before clippy / fmt run against them.
+      - name: Clone sibling oxideav-* crates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/clone-siblings.sh
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2

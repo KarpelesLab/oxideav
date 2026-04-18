@@ -465,28 +465,36 @@ The `oxideav` binary is produced by the `oxideav-cli` crate:
 cargo run -p oxideav-cli -- --help
 ```
 
-### Working with extracted sibling crates
+### Working with the sibling crates
 
-A handful of fully-spec-complete codecs have been extracted into their
-own repositories under the
-[OxideAV organization](https://github.com/OxideAV) and are consumed from
-crates.io. To hack on them locally alongside this repo, clone them as
-siblings and run `scripts/dev-patch.sh`:
+Every per-format codec lives in its own `OxideAV/oxideav-*` repository.
+To build the workspace you need all of them cloned into `crates/` — the
+root `Cargo.toml` globs `crates/*` as members and points every
+`[patch.crates-io]` entry at those local paths. No crates.io round-trip
+happens for any `oxideav-*` dep during local dev or CI.
+
+`scripts/clone-siblings.sh` does the cloning. Run it once after you
+check out this repo and whenever a new OxideAV codec repo is added:
 
 ```
-# layout: parent/
-#         ├── oxideav/           (this repo)
-#         └── oxideav-<name>/    (any OxideAV/oxideav-* clone)
-git clone git@github.com:OxideAV/oxideav-gsm.git ../oxideav-gsm
-./scripts/dev-patch.sh           # generates .cargo/config.toml
-cargo run -p oxideplay -- some.wav
+gh auth login                   # one-time: gh CLI needs to be authed
+./scripts/clone-siblings.sh     # clones every OxideAV/oxideav-* into crates/
+cargo build --workspace
 ```
 
-`scripts/dev-patch.sh` rewrites `.cargo/config.toml` with a
-`[patch.crates-io]` entry for every `../oxideav-*` sibling it finds,
-plus every in-workspace `crates/oxideav-*` crate. The file is
-gitignored, so each dev owns their own layout. Re-run the script after
-adding or removing a sibling.
+The script is idempotent: existing clones are left untouched so your
+local WIP in a given sibling survives re-runs. Deleting a clone and
+re-running the script re-fetches it fresh.
+
+CI runs the same script at the top of each job (see
+`.github/workflows/ci.yml`), so no crates.io resolution is needed in CI
+either — the workspace builds whether or not a given crate has been
+published yet.
+
+`.gitignore` hides the cloned siblings so `git status` in this repo
+only shows changes to the four native members (`oxideav`,
+`oxideav-cli`, `oxideplay`, `oxideav-tests`). Changes inside a cloned
+sibling are committed against that sibling's own repo, not this one.
 
 ## License
 
