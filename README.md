@@ -148,19 +148,19 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 | **PCM** (s8/16/24/32/f32/f64) | ✅ all variants | ✅ all variants |
 | **slin** (Asterisk raw PCM) | ✅ .sln/.slin/.sln16/.sln48 etc. | ✅ same — headerless S16LE |
 | **FLAC** | ✅ bit-exact vs reference | ✅ bit-exact vs reference |
-| **Vorbis** | ✅ matches lewton/ffmpeg (type-0/1/2 residue) | ✅ stereo coupling + ATH floor |
-| **Opus** | ✅ CELT mono+stereo; SILK NB/MB/WB mono 10+20+40+60 ms; SILK stereo | ✅ CELT-only full-band 20 ms + SILK NB mono 20 ms (24 dB round-trip SNR) |
+| **Vorbis** | ✅ matches lewton/ffmpeg (type-0/1/2 residue); 22-28× IMDCT via precomputed cosine + std::simd chunked f32x8 | ✅ stereo coupling + ATH floor |
+| **Opus** | ✅ CELT mono+stereo (incl. transient/short blocks); SILK NB/MB/WB mono 10+20+40+60 ms; SILK stereo | ✅ CELT full-band + transient short-blocks + SILK NB mono 20 ms (24 dB round-trip SNR) |
 | **MP1** | ✅ all modes, RMS 2.9e-5 vs ffmpeg | ✅ CBR (greedy allocator, 89 dB PSNR on pure tone) |
 | **MP2** | ✅ all modes, RMS 2.9e-5 vs ffmpeg | ✅ CBR mono+stereo (greedy allocator, ~31 dB PSNR) |
 | **MP3** | ✅ MPEG-1 Layer III (M/S stereo) | ✅ CBR mono+stereo |
-| **AAC-LC** | ✅ mono+stereo, M/S, IMDCT | ✅ mono+stereo, ffmpeg accepts |
+| **AAC-LC** | ✅ mono+stereo, M/S, IMDCT | ✅ mono+stereo + PNS + intensity stereo + pulse data, ffmpeg accepts |
 | **CELT** | ✅ full §4.3 pipeline (energy + PVQ + IMDCT + post-filter) | ✅ mono + stereo dual-stereo (intra-only long-block; energy + PVQ + fMDCT) |
 | **Speex** | ✅ NB modes 1-8 + WB via QMF+SB-CELP (+ formant postfilter); intensity stereo | ✅ full NB ladder (sub-modes 1-8, 2.15-24.6 kbit/s) + WB sub-mode-1 (QMF split, 16 kHz) |
 | **GSM 06.10** | ✅ full RPE-LTP | ✅ full RPE-LTP (standard + WAV-49) |
 | **G.711** (μ-law / A-law) | ✅ ITU tables | ✅ ITU tables (pcm_mulaw / pcm_alaw + aliases) |
 | **G.722** | ✅ 64 kbit/s QMF + dual-band ADPCM (37 dB PSNR, self-consistent tables) | ✅ same roundtrip |
 | **G.723.1** | ✅ full-synthesis stateful decoder (5.3k ACELP + 6.3k MP-MLQ) | ✅ 5.3k ACELP + 6.3k MP-MLQ (20-24 dB round-trip PSNR via own decoder) |
-| **G.728** | ✅ LD-CELP 50-order backward-adaptive; placeholder codebook | ✅ exhaustive 128×8 analysis-by-synthesis |
+| **G.728** | ✅ LD-CELP 50-order backward-adaptive + ITU Annex B codebooks + §3.7 Barnwell window + §5.5 postfilter | ✅ exhaustive 128×8 analysis-by-synthesis |
 | **G.729** | ✅ CS-ACELP (non-spec tables, produces audible speech) | ✅ symmetric encoder |
 | **IMA-ADPCM (AMV)** | ✅ | ✅ (33.8 dB PSNR roundtrip) |
 | **8SVX** | ✅ | ✅ via FORM/8SVX container muxer |
@@ -178,11 +178,11 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 | **MPEG-4 Part 2** | ✅ I+P-VOP, half-pel MC | ✅ I+P-VOP (41-43 dB PSNR, 21% vs all-I) |
 | **Theora** | ✅ I+P frames | ✅ I+P frames (45 dB PSNR, 3.7× vs all-I) |
 | **H.263** | ✅ I+P pictures, half-pel MC | ✅ I+P pictures, diamond-pattern motion search (±15 pel range), 46 dB PSNR on sliding-gradient |
-| **H.264** | Baseline I-slice skeleton: CAVLC + intra-pred + transforms + deblocking; 100% on solid-gray IDR | — |
-| **H.265 (HEVC)** | I-slice keyframe decode: CABAC + CTU walker + 35 intra modes + DST-VII / DCT 4/8/16/32 (inter pending) | — |
-| **VP6** | ✅ Keyframe decode (465×352 FLV sample: range coder + MB-types + IDCT + intra/inter MC, partial inter) | — |
-| **VP8** | ✅ I+P frames (6-tap sub-pel + MV decode + ref management) | ✅ I-frame only (DC_PRED, 42 dB PSNR at qindex 50) |
-| **VP9** | ✅ Keyframe decode: 10 intra modes + DCT/ADST 4/8/16/32 + deblock (inter pending) | — |
+| **H.264** | Full CABAC+CAVLC I/P/B slice decode (real-world MKV playback) | ✅ Baseline profile: Intra_16×16 + half-pel ME P-slices (49.9 dB avg PSNR on testsrc) |
+| **H.265 (HEVC)** | ✅ I-slice + P-slice decode: CABAC + CTU + 35 intra modes + DCT 4/8/16/32 + merge/AMVP + 8-tap MC (B-slices pending) | — |
+| **VP6** | ✅ Full FLV playback (845/845 frames of sample decode cleanly; range coder + MB-types + IDCT + MC + loop filter + vp6a alpha) | — |
+| **VP8** | ✅ I+P frames (6-tap sub-pel + MV decode + ref management) | ✅ I + P frames, all 5 intra modes + SPLIT_MV + loop filter (42-51 dB PSNR) |
+| **VP9** | ✅ Keyframe + P-frame decode (10 intra modes + DCT/ADST 4/8/16/32 + 8-tap MC + DPB) | — |
 | **AV1** | ✅ Full AVIF still decode + AVIS single-ref inter (Phases 1-8: range coder + CDFs + partition walk + coeffs + transforms + all intra + LR + film grain + inter MC) | — |
 | **AMV video** | ✅ (synthesised JPEG header + vertical flip) | ✅ (via MJPEG encoder, 33 dB PSNR roundtrip) |
 | **ProRes 422** | ✅ 4:2:2 Proxy/LT/Standard (forward/inverse 8×8 DCT + zig-zag + exp-Golomb) | ✅ same (Yuv422P in; 44 dB PSNR at quant 4). MP4 `.mov` FourCC wiring still TODO. |
@@ -196,10 +196,10 @@ rewriting (FLAC ↔ MKV, Ogg ↔ MKV, MP4 ↔ MOV, etc.).
 |-------|--------|--------|
 | **PNG / APNG** | ✅ 5 color types × 8/16-bit, all 5 filters, APNG animation | ✅ same matrix + APNG emit |
 | **GIF** | ✅ GIF87a/89a, LZW, interlaced, animation | ✅ GIF89a, animation, per-frame palettes |
-| **WebP VP8L** | ✅ full lossless (Huffman + LZ77 + transforms) | ✅ lossless (no transforms, byte-identical roundtrip) |
-| **WebP VP8** | ✅ lossy (via VP8 decoder) | ✅ lossy (via VP8 I-frame enc, 32 dB PSNR) |
+| **WebP VP8L** | ✅ full lossless (Huffman + LZ77 + transforms) | ✅ lossless (subtract-green + predictor + colour transform, VP8X for RGBA) |
+| **WebP VP8** | ✅ lossy (via VP8 decoder) | ✅ lossy (via VP8 I-frame + ALPH sidecar for RGBA) |
 | **JPEG** (still) | ✅ via MJPEG codec | ✅ via MJPEG codec |
-| **JPEG 2000** | ✅ Part-1 baseline decode (MQ coder + EBCOT + 5/3 IDWT + tier-2; LRCP/RLCP) | — |
+| **JPEG 2000** | ✅ Part-1 baseline decode (MQ + EBCOT + 5/3 + 9/7 IDWT + tier-2; LRCP/RLCP) | ✅ 5/3 reversible lossless (single-tile, Gray8, bit-exact round-trip) |
 | **AVIF** | ✅ still + AVIS via oxideav-avif: grid + irot/imir/clap + alpha + AVIS sample-table | — |
 
 </details>
