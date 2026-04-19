@@ -18,6 +18,12 @@ pub struct VideoRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// Adapter-reported maximum texture dimension. Surface width/height
+    /// (and upload plane sizes) are clamped to this so that going
+    /// fullscreen on a display larger than the GPU's limit — e.g.
+    /// 4 K monitors with an adapter that reports 2048 — doesn't panic
+    /// inside `surface.configure`.
+    max_texture_dim: u32,
     /// The current (Y-plane, i.e. frame) dimensions. Textures are
     /// resized lazily when this changes.
     dims: Option<(u32, u32)>,
@@ -58,18 +64,25 @@ impl VideoRenderer {
             .await
             .ok_or_else(|| Error::other("wgpu: no suitable adapter"))?;
 
+        // Use the adapter's native limits rather than the
+        // `downlevel_defaults` preset — the latter caps max texture
+        // dimension at 2048, which is smaller than any 4 K display
+        // surface wants to be once the user clicks the fullscreen
+        // button.
+        let adapter_limits = adapter.limits();
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("oxideplay-device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    required_limits: adapter_limits.clone(),
                     memory_hints: wgpu::MemoryHints::default(),
                 },
                 None,
             )
             .await
             .map_err(|e| Error::other(format!("wgpu: request_device: {e}")))?;
+        let max_texture_dim = adapter_limits.max_texture_dimension_2d;
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps
@@ -81,8 +94,8 @@ impl VideoRenderer {
         let surface_cfg = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: size.width.clamp(1, max_texture_dim),
+            height: size.height.clamp(1, max_texture_dim),
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
@@ -202,6 +215,7 @@ impl VideoRenderer {
             pipeline,
             bind_group_layout,
             sampler,
+            max_texture_dim,
             dims: None,
             textures: None,
             bind_group: None,
@@ -209,8 +223,8 @@ impl VideoRenderer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.surface_cfg.width = width.max(1);
-        self.surface_cfg.height = height.max(1);
+        self.surface_cfg.width = width.clamp(1, self.max_texture_dim);
+        self.surface_cfg.height = height.clamp(1, self.max_texture_dim);
         self.surface.configure(&self.device, &self.surface_cfg);
     }
 
