@@ -4,24 +4,35 @@
 //! loop: read packet → decode → push frames to driver → poll events →
 //! sleep if buffer is getting full. Audio is the master clock.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use oxideav::Registries;
-use oxideav_codec::Decoder;
-use oxideav_container::{Demuxer, ReadSeek};
-use oxideav_core::{AudioFrame, CodecParameters, Error, Frame, MediaType, Result, StreamInfo};
+use oxideav_container::ReadSeek;
+use oxideav_core::{AudioFrame, CodecParameters, Error, MediaType, Result, StreamInfo, VideoFrame};
 use oxideav_source::{BufferedSource, SourceRegistry};
 
+use crate::decode_worker::{DecodeWorker, DecodedUnit};
 use crate::driver::{OutputDriver, PlayerEvent, SeekDir};
+
+/// How far into the future a decoded video frame is kept before we
+/// decide to drop it. Decoder output is free-running on its own thread
+/// — during long decoder stalls or after an aggressive seek this bounds
+/// the main-thread queue so memory stays flat.
+const VIDEO_QUEUE_MAX_AHEAD: Duration = Duration::from_secs(4);
 
 /// All the state the play loop needs.
 pub struct Player<D: OutputDriver> {
     pub driver: D,
-    demuxer: Box<dyn Demuxer>,
-    audio_decoder: Option<Box<dyn Decoder>>,
-    video_decoder: Option<Box<dyn Decoder>>,
+    /// Background thread doing demux + decode. Produces `DecodedUnit`s
+    /// into `out_rx` (owned by the worker) for the main thread to drain.
+    /// Dropped on Player drop; the worker joins cleanly.
+    worker: DecodeWorker,
     audio_stream: Option<StreamInfo>,
     video_stream: Option<StreamInfo>,
+    /// Decoded video frames pending presentation. Popped on every tick
+    /// in pts-order as wallclock catches up to their pts.
+    video_queue: VecDeque<VideoFrame>,
     /// Where the audio master clock was *set* to (from a seek or start).
     /// Added to driver.master_clock_pos() to get the "logical" position.
     clock_origin: Duration,
@@ -31,7 +42,12 @@ pub struct Player<D: OutputDriver> {
     output_sample_rate: u32,
     paused: bool,
     volume: f32,
+    /// True once the worker has signalled [`DecodedUnit::Eof`].
     eof: bool,
+    /// Tracks whether we're still waiting for a `Seeked` acknowledgement
+    /// after issuing a seek. While `true`, Audio/Video units arriving
+    /// in the channel predate the seek and must be discarded.
+    seek_pending: bool,
 }
 
 /// Summary info about what we'll play.
@@ -187,20 +203,25 @@ impl<D: OutputDriver> Player<D> {
             format_name,
         };
 
+        let audio_idx = audio.as_ref().map(|s| s.index);
+        let video_idx = video.as_ref().map(|s| s.index);
+        let worker =
+            DecodeWorker::spawn(demuxer, audio_decoder, video_decoder, audio_idx, video_idx);
+
         Ok((
             Self {
                 driver,
-                demuxer,
-                audio_decoder,
-                video_decoder,
+                worker,
                 audio_stream: audio,
                 video_stream: video,
+                video_queue: VecDeque::new(),
                 clock_origin: Duration::ZERO,
                 clock_baseline_samples: 0,
                 output_sample_rate: audio_sample_rate,
                 paused: false,
                 volume: 1.0,
                 eof: false,
+                seek_pending: false,
             },
             opened,
         ))
@@ -274,9 +295,13 @@ impl<D: OutputDriver> Player<D> {
     }
 
     /// Attempt to seek to an absolute position.
+    ///
+    /// Sends a seek command to the decode worker and marks
+    /// `seek_pending`. The worker will respond with a
+    /// [`DecodedUnit::Seeked`] that the render loop intercepts to
+    /// update the master clock; any audio/video units arriving before
+    /// that marker are discarded (they predate the seek).
     pub fn seek_to(&mut self, target: Duration) -> Result<()> {
-        // Prefer seeking on the audio stream (master clock); fall back to
-        // video if no audio is present.
         let (stream_idx, tb) = if let Some(a) = &self.audio_stream {
             (a.index, a.time_base)
         } else if let Some(v) = &self.video_stream {
@@ -285,26 +310,36 @@ impl<D: OutputDriver> Player<D> {
             return Err(Error::unsupported("nothing to seek"));
         };
         let pts = (target.as_secs_f64() / tb.as_rational().as_f64()).round() as i64;
-        let landed = self.demuxer.seek_to(stream_idx, pts)?;
-        let landed_secs = tb.seconds_of(landed);
-        let landed_dur = if landed_secs.is_finite() && landed_secs > 0.0 {
-            Duration::from_secs_f64(landed_secs)
-        } else {
-            Duration::ZERO
-        };
+        // Clear the video queue — anything in it is pre-seek.
+        self.video_queue.clear();
+        if !self.worker.seek(stream_idx, pts) {
+            return Err(Error::other("decode worker exited"));
+        }
+        self.seek_pending = true;
+        self.eof = false;
+        Ok(())
+    }
 
-        // Reset decoders so we don't serve pre-seek frames and their
-        // internal filter / predictor state is wiped. reset() falls back
-        // to a flush+drain for codecs that don't override it, so this is
-        // always at least as good as the old behaviour.
-        if let Some(dec) = self.audio_decoder.as_mut() {
-            // Best-effort; any error here just means some buffered frames
-            // remain, which will be harmless.
-            let _ = dec.reset();
-        }
-        if let Some(dec) = self.video_decoder.as_mut() {
-            let _ = dec.reset();
-        }
+    /// Called when the worker emits [`DecodedUnit::Seeked`]. Recomputes
+    /// the master-clock origin so `position()` lines up with the
+    /// landed pts.
+    fn on_seeked(&mut self, landed_pts: i64) {
+        let tb = self
+            .audio_stream
+            .as_ref()
+            .map(|s| s.time_base)
+            .or_else(|| self.video_stream.as_ref().map(|s| s.time_base));
+        let landed_dur = match tb {
+            Some(tb) => {
+                let s = tb.seconds_of(landed_pts);
+                if s.is_finite() && s > 0.0 {
+                    Duration::from_secs_f64(s)
+                } else {
+                    Duration::ZERO
+                }
+            }
+            None => Duration::ZERO,
+        };
         self.clock_baseline_samples =
             self.driver
                 .master_clock_pos()
@@ -312,130 +347,121 @@ impl<D: OutputDriver> Player<D> {
                 .max(0.0)
                 .mul_add(self.output_sample_rate as f64, 0.0) as u64;
         self.clock_origin = landed_dur;
-        self.eof = false;
-        Ok(())
+        self.seek_pending = false;
     }
 
-    /// Drive one loop iteration: read a packet, decode, push frames out.
-    /// Returns Ok(()) normally; Err at EOF or unrecoverable error.
+    /// Drive one loop iteration:
+    ///   1. Drain everything the decode worker has produced into our
+    ///      audio/video queues (audio goes straight to SDL's queue,
+    ///      video into `self.video_queue`).
+    ///   2. Pop any video frames whose pts has reached the wallclock
+    ///      and present them.
+    ///
+    /// Returns `Ok(true)` if something was moved; `Ok(false)` when
+    /// paused / EOF / nothing available.
     pub fn pump_once(&mut self) -> Result<bool> {
-        if self.paused {
-            return Ok(false);
-        }
-        if self.eof {
-            return Ok(false);
-        }
-        let audio_idx = self.audio_stream.as_ref().map(|s| s.index);
-        let video_idx = self.video_stream.as_ref().map(|s| s.index);
-        // Drain data/subtitle packets we don't route anywhere — they'd
-        // otherwise eat a whole tick each. Files that interleave many
-        // subtitle streams (15+ in the mewmew sample) would otherwise
-        // throttle video presentation to the ratio of interesting-to-
-        // total packets × tick rate, which can fall well below the
-        // target frame rate.
-        let pkt = loop {
-            let pkt = match self.demuxer.next_packet() {
-                Ok(p) => p,
-                Err(Error::Eof) => {
-                    self.eof = true;
-                    // Flush decoders to drain.
-                    if let Some(d) = self.audio_decoder.as_mut() {
-                        let _ = d.flush();
-                        while let Ok(Frame::Audio(af)) = d.receive_frame() {
-                            let _ = self.driver.queue_audio(&af);
-                        }
-                    }
-                    return Ok(false);
-                }
-                Err(e) => return Err(e),
-            };
-            let idx = Some(pkt.stream_index);
-            if idx == audio_idx || idx == video_idx {
-                break pkt;
-            }
-            // Not a routed stream — discard and read the next packet.
-        };
+        let mut activity = false;
 
-        // Route packet to the right decoder.
-        if Some(pkt.stream_index) == audio_idx {
-            if let Some(dec) = self.audio_decoder.as_mut() {
-                if let Err(e) = dec.send_packet(&pkt) {
-                    if !matches!(e, Error::NeedMore) {
-                        eprintln!("oxideplay: audio decode error: {e}");
+        // Phase 1 — drain worker output channel.
+        while let Some(unit) = self.worker.try_recv() {
+            activity = true;
+            match unit {
+                DecodedUnit::Audio(af) => {
+                    if self.seek_pending {
+                        // Pre-seek payload; discard.
+                        continue;
                     }
+                    // Driver is SDL-backed; queue_audio pushes into its
+                    // ring buffer which the OS audio device drains at
+                    // the output rate. This is the master clock.
+                    self.driver.queue_audio(&af)?;
                 }
-                loop {
-                    match dec.receive_frame() {
-                        Ok(Frame::Audio(af)) => {
-                            self.driver.queue_audio(&af)?;
-                        }
-                        Ok(Frame::Video(_)) => {}
-                        Ok(_) => {}
-                        Err(Error::NeedMore) => break,
-                        Err(Error::Eof) => {
-                            self.eof = true;
-                            break;
-                        }
-                        Err(e) => {
-                            eprintln!("oxideplay: audio recv error: {e}");
-                            break;
-                        }
+                DecodedUnit::Video(vf) => {
+                    if self.seek_pending {
+                        continue;
                     }
+                    self.video_queue.push_back(vf);
+                    self.trim_video_queue();
                 }
-            }
-        } else if Some(pkt.stream_index) == video_idx {
-            // Collect decoded video frames first, then present them
-            // (avoids a double-borrow of &mut self through video_decoder
-            // and &self through position()/driver).
-            let mut decoded: Vec<oxideav_core::VideoFrame> = Vec::new();
-            if let Some(dec) = self.video_decoder.as_mut() {
-                if let Err(e) = dec.send_packet(&pkt) {
-                    if !matches!(e, Error::NeedMore) {
-                        eprintln!("oxideplay: video decode error: {e}");
-                    }
+                DecodedUnit::Seeked(landed) => {
+                    self.on_seeked(landed);
                 }
-                loop {
-                    match dec.receive_frame() {
-                        Ok(Frame::Video(vf)) => decoded.push(vf),
-                        Ok(Frame::Audio(_)) => {}
-                        Ok(_) => {}
-                        Err(Error::NeedMore) => break,
-                        Err(Error::Eof) => {
-                            self.eof = true;
-                            break;
-                        }
-                        Err(e) => {
-                            eprintln!("oxideplay: video recv error: {e}");
-                            break;
-                        }
-                    }
+                DecodedUnit::Eof => {
+                    self.eof = true;
                 }
-            }
-            let video_tb = self.video_stream.as_ref().map(|s| s.time_base);
-            for vf in decoded {
-                let pts_secs = match (vf.pts, video_tb) {
-                    (Some(p), Some(tb)) => tb.seconds_of(p),
-                    _ => 0.0,
-                };
-                let target = if pts_secs.is_finite() && pts_secs > 0.0 {
-                    Duration::from_secs_f64(pts_secs)
-                } else {
-                    Duration::ZERO
-                };
-                let now = self.position();
-                let epsilon = Duration::from_millis(50);
-                if target + epsilon < now {
-                    continue;
+                DecodedUnit::Err(msg) => {
+                    eprintln!("oxideplay: decode worker error: {msg}");
+                    self.eof = true;
                 }
-                if target > now + epsilon {
-                    let wait = target - now;
-                    let capped = std::cmp::min(wait, Duration::from_millis(50));
-                    std::thread::sleep(capped);
-                }
-                self.driver.present_video(&vf)?;
             }
         }
-        Ok(true)
+
+        if self.paused {
+            return Ok(activity);
+        }
+
+        // Phase 2 — present video frames whose pts has reached the wallclock.
+        let now = self.position();
+        let video_tb = self.video_stream.as_ref().map(|s| s.time_base);
+        let epsilon = Duration::from_millis(50);
+        while let Some(vf) = self.video_queue.front() {
+            let pts_secs = match (vf.pts, video_tb) {
+                (Some(p), Some(tb)) => tb.seconds_of(p),
+                _ => 0.0,
+            };
+            let target = if pts_secs.is_finite() && pts_secs > 0.0 {
+                Duration::from_secs_f64(pts_secs)
+            } else {
+                Duration::ZERO
+            };
+            if target > now + epsilon {
+                // Not yet time.
+                break;
+            }
+            // Pop + present. If the frame is too old we still display it
+            // (better to jump-cut than freeze) unless the backlog is
+            // large; `trim_video_queue` handles that case up front.
+            let vf = self.video_queue.pop_front().unwrap();
+            self.driver.present_video(&vf)?;
+            activity = true;
+        }
+
+        Ok(activity)
+    }
+
+    /// Bound the video queue so an accumulated decode burst doesn't
+    /// balloon memory. Drops frames whose pts is so far past the
+    /// current wallclock that we've clearly fallen behind — the next
+    /// frame still on the queue becomes the new presentation target.
+    fn trim_video_queue(&mut self) {
+        let Some(tb) = self.video_stream.as_ref().map(|s| s.time_base) else {
+            return;
+        };
+        let now = self.position();
+        // Drop from the FRONT anything more than `VIDEO_QUEUE_MAX_AHEAD`
+        // BEHIND wallclock (stale), and from the BACK anything more
+        // than `VIDEO_QUEUE_MAX_AHEAD` AHEAD of wallclock (we queued
+        // too much future). The second case is the real safety net; the
+        // first trims after a pause/seek where decode raced ahead.
+        let max_behind = Duration::from_secs(1);
+        while let Some(front) = self.video_queue.front() {
+            let pts_secs = front.pts.map(|p| tb.seconds_of(p)).unwrap_or(0.0);
+            let target = Duration::from_secs_f64(pts_secs.max(0.0));
+            if target + max_behind < now {
+                self.video_queue.pop_front();
+            } else {
+                break;
+            }
+        }
+        while let Some(back) = self.video_queue.back() {
+            let pts_secs = back.pts.map(|p| tb.seconds_of(p)).unwrap_or(0.0);
+            let target = Duration::from_secs_f64(pts_secs.max(0.0));
+            if target > now + VIDEO_QUEUE_MAX_AHEAD {
+                self.video_queue.pop_back();
+            } else {
+                break;
+            }
+        }
     }
 
     pub fn eof_reached(&self) -> bool {
@@ -475,15 +501,12 @@ impl<D: OutputDriver> Player<D> {
             let _ = &mut running;
             let _ = &mut seek_supported;
 
-            // Pump the pipeline if we're not too far ahead.
-            let max_buffer_secs = Duration::from_secs(2);
-            let buffered = Duration::from_secs_f64(
-                self.driver.audio_queue_len_samples() as f64
-                    / self.output_sample_rate.max(1) as f64,
-            );
-            if !self.paused && !self.eof && buffered < max_buffer_secs {
-                let _ = self.pump_once()?;
-            }
+            // Drain decoded frames from the worker + present any due
+            // video. Backpressure is the worker's bounded output
+            // channel — when we stop consuming (pause, slow render),
+            // the worker blocks inside its send(). No gating needed
+            // here.
+            let _ = self.pump_once()?;
 
             if self.eof && self.audio_drained() && !self.paused {
                 break;

@@ -4,6 +4,7 @@
 //! transitive C dep via `sdl2-sys`) is allowed. The library half of
 //! oxideav remains pure Rust.
 
+mod decode_worker;
 mod driver;
 mod drivers;
 mod events;
