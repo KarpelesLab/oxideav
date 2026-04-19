@@ -28,7 +28,7 @@
 //! dropped which unblocks any pending receives.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -319,16 +319,27 @@ impl DemuxCtx {
             match self.demuxer.next_packet() {
                 Ok(p) => {
                     let idx = Some(p.stream_index);
-                    let tx = if idx == self.audio_idx {
-                        Some(&self.audio_pkt_tx)
-                    } else if idx == self.video_idx {
-                        Some(&self.video_pkt_tx)
-                    } else {
-                        None
-                    };
-                    if let Some(tx) = tx {
-                        if tx.send(PktMsg::Pkt(p)).is_err() {
+                    if idx == self.audio_idx {
+                        // Audio is the critical path — block until the
+                        // audio decoder's queue has room. If we dropped
+                        // audio here SDL would underrun.
+                        if self.audio_pkt_tx.send(PktMsg::Pkt(p)).is_err() {
                             return;
+                        }
+                    } else if idx == self.video_idx {
+                        // Video is discardable — if the video decoder
+                        // can't keep up, DROP the packet rather than
+                        // block the demux thread. Blocking here would
+                        // stop us from ever reading the next audio
+                        // packet either (head-of-line blocking), which
+                        // is far worse than a dropped video frame.
+                        match self.video_pkt_tx.try_send(PktMsg::Pkt(p)) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                // drop silently; video decoder catches
+                                // up on the next I-VOP.
+                            }
+                            Err(TrySendError::Disconnected(_)) => return,
                         }
                     }
                     // else: subtitle / data / unknown — discard.

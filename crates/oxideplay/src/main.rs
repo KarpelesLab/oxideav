@@ -218,16 +218,18 @@ fn run_loop<D: OutputDriver>(
         let _ = play.pump_once()?;
 
         // Pre-roll gate: keep the audio device paused until enough
-        // samples are buffered (0.5 s at the stream's sample rate).
+        // samples are buffered (0.25 s at the stream's sample rate).
         // This avoids the "first samples glitch" where SDL starts
         // draining the queue before demux + decode have produced
-        // anything.
+        // anything. Keep this value below what MP2/AAC typical
+        // frame sizes pile up to in <10 packets so the check triggers
+        // reliably.
         let preroll_samples = media
             .audio
             .as_ref()
             .and_then(|a| a.params.sample_rate)
             .unwrap_or(48_000) as u64
-            / 2;
+            / 4;
         let _ = play.driver.try_start_audio(preroll_samples);
 
         if play.eof_reached() && play.audio_drained() && !play.paused() {
