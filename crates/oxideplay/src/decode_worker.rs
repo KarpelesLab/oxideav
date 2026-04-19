@@ -87,9 +87,16 @@ pub struct DecodeWorker {
     audio_handle: Option<JoinHandle<()>>,
     video_handle: Option<JoinHandle<()>>,
     cmd_tx: mpsc::Sender<DecodeCmd>,
-    audio_rx: Receiver<AudioFrame>,
-    video_rx: Receiver<VideoFrame>,
-    ctl_rx: Receiver<DecodedCtl>,
+    // Receivers are `Option` so `Drop` can close them *before* joining
+    // the worker threads. Dropping a receiver hangs up its `SyncSender`
+    // side; without this, a decoder thread blocked inside `frame_tx.send`
+    // would never notice the shutdown flag, the demux thread would
+    // remain blocked on its own `send` into the (now-unread) decoder
+    // input channel, and the Drop would wait up to one buffered frame
+    // before the process actually exits.
+    audio_rx: Option<Receiver<AudioFrame>>,
+    video_rx: Option<Receiver<VideoFrame>>,
+    ctl_rx: Option<Receiver<DecodedCtl>>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -184,9 +191,9 @@ impl DecodeWorker {
             audio_handle,
             video_handle,
             cmd_tx,
-            audio_rx,
-            video_rx,
-            ctl_rx,
+            audio_rx: Some(audio_rx),
+            video_rx: Some(video_rx),
+            ctl_rx: Some(ctl_rx),
             shutdown,
         }
     }
@@ -207,15 +214,21 @@ impl DecodeWorker {
     /// video channel, which fills up, which blocks the video decoder's
     /// `send()`, which stops the decoder from racing ahead.
     pub fn try_recv_subset(&self, want_video: bool) -> Option<DecodedUnit> {
-        if let Ok(af) = self.audio_rx.try_recv() {
-            return Some(DecodedUnit::Audio(af));
+        if let Some(rx) = self.audio_rx.as_ref() {
+            if let Ok(af) = rx.try_recv() {
+                return Some(DecodedUnit::Audio(af));
+            }
         }
-        if let Ok(ctl) = self.ctl_rx.try_recv() {
-            return Some(DecodedUnit::Ctl(ctl));
+        if let Some(rx) = self.ctl_rx.as_ref() {
+            if let Ok(ctl) = rx.try_recv() {
+                return Some(DecodedUnit::Ctl(ctl));
+            }
         }
         if want_video {
-            if let Ok(vf) = self.video_rx.try_recv() {
-                return Some(DecodedUnit::Video(vf));
+            if let Some(rx) = self.video_rx.as_ref() {
+                if let Ok(vf) = rx.try_recv() {
+                    return Some(DecodedUnit::Video(vf));
+                }
             }
         }
         None
@@ -232,8 +245,16 @@ impl Drop for DecodeWorker {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
         let _ = self.cmd_tx.send(DecodeCmd::Shutdown);
-        // The demux thread drops its senders on exit, which hangs up
-        // the audio/video packet channels and unblocks the decoders.
+        // Close the main-thread-side receivers *before* joining. A
+        // decoder thread blocked inside `frame_tx.send()` only notices
+        // the shutdown flag after its send returns, and a send only
+        // returns once the receiver is dropped. Dropping them here
+        // hangs up both `frame_tx` channels, unblocking the decoders;
+        // they in turn drop their `pkt_rx` receivers, unblocking the
+        // demux thread's own `send()` on the packet channels.
+        self.audio_rx.take();
+        self.video_rx.take();
+        self.ctl_rx.take();
         if let Some(h) = self.demux_handle.take() {
             let _ = h.join();
         }
