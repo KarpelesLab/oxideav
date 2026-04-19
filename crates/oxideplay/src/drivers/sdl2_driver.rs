@@ -215,6 +215,26 @@ impl Sdl2Driver {
             output_channels: channels,
         })
     }
+
+    /// Toggle SDL_WINDOW_FULLSCREEN_DESKTOP on the video window. No-op
+    /// if the driver was built in audio-only mode.
+    fn toggle_fullscreen(&mut self) {
+        let Some(v) = self.video.as_ref() else {
+            return;
+        };
+        let window = v.window;
+        // SAFETY: `window` was returned by SDL_CreateWindow and is owned
+        // by VideoState for the driver's lifetime; lib is valid.
+        let flags = unsafe { (self.lib.SDL_GetWindowFlags)(window) };
+        let next = if flags & ldr::SDL_WINDOW_FULLSCREEN_DESKTOP != 0 {
+            0
+        } else {
+            ldr::SDL_WINDOW_FULLSCREEN_DESKTOP
+        };
+        unsafe {
+            (self.lib.SDL_SetWindowFullscreen)(window, next);
+        }
+    }
 }
 
 fn open_video(lib: &Arc<Sdl2Lib>, w: u32, h: u32) -> Result<VideoState> {
@@ -338,9 +358,17 @@ impl OutputDriver for Sdl2Driver {
                     self.lib.last_error()
                 )));
             }
+            // Letterbox/pillarbox: compute the aspect-preserving dest
+            // rectangle against the current renderer output size.
+            let mut out_w: c_int = 0;
+            let mut out_h: c_int = 0;
+            unsafe {
+                (self.lib.SDL_GetRendererOutputSize)(v.renderer, &mut out_w, &mut out_h);
+            }
+            let dst = fit_rect(w as i32, h as i32, out_w as i32, out_h as i32);
             unsafe { (self.lib.SDL_RenderClear)(v.renderer) };
             unsafe {
-                (self.lib.SDL_RenderCopy)(v.renderer, tb.texture, ptr::null(), ptr::null());
+                (self.lib.SDL_RenderCopy)(v.renderer, tb.texture, ptr::null(), &dst as *const _);
             }
             unsafe { (self.lib.SDL_RenderPresent)(v.renderer) };
         }
@@ -408,7 +436,11 @@ impl OutputDriver for Sdl2Driver {
                 ldr::SDL_KEYDOWN => {
                     // SAFETY: type-discriminant matches the union variant.
                     let key = unsafe { ev.as_key() };
-                    if let Some(pe) = map_sdl_key(key.keysym.sym, key.keysym.r#mod) {
+                    // F toggles borderless fullscreen. Handled locally
+                    // — there's no cross-backend PlayerEvent for this.
+                    if key.keysym.sym == ldr::SDLK_f {
+                        self.toggle_fullscreen();
+                    } else if let Some(pe) = map_sdl_key(key.keysym.sym, key.keysym.r#mod) {
                         out.push(pe);
                     }
                 }
@@ -452,6 +484,36 @@ impl OutputDriver for Sdl2Driver {
         let bpf = self.audio.bytes_per_frame.max(1) as u64;
         queued_bytes / bpf
     }
+}
+
+/// Letterbox/pillarbox fit: largest rectangle of `(src_w/src_h)` aspect
+/// that fits inside `(dst_w × dst_h)`, centered. Fallbacks to the whole
+/// output when any dimension is degenerate.
+fn fit_rect(src_w: i32, src_h: i32, dst_w: i32, dst_h: i32) -> ldr::SDL_Rect {
+    if src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0 {
+        return ldr::SDL_Rect {
+            x: 0,
+            y: 0,
+            w: dst_w.max(0),
+            h: dst_h.max(0),
+        };
+    }
+    let src_ar = src_w as f64 / src_h as f64;
+    let dst_ar = dst_w as f64 / dst_h as f64;
+    let (w, h) = if src_ar > dst_ar {
+        // Source is wider — fit to width, letterbox top/bottom.
+        let w = dst_w;
+        let h = (dst_w as f64 / src_ar).round() as i32;
+        (w, h)
+    } else {
+        // Source is taller — fit to height, pillarbox left/right.
+        let h = dst_h;
+        let w = (dst_h as f64 * src_ar).round() as i32;
+        (w, h)
+    };
+    let x = (dst_w - w) / 2;
+    let y = (dst_h - h) / 2;
+    ldr::SDL_Rect { x, y, w, h }
 }
 
 fn map_sdl_key(sym: i32, modmask: u16) -> Option<PlayerEvent> {

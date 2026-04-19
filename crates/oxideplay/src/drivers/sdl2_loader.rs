@@ -78,6 +78,7 @@ pub const SDLK_SCANCODE_MASK: u32 = 1 << 30;
 pub const SDLK_ESCAPE: i32 = 0x1B;
 pub const SDLK_SPACE: i32 = b' ' as i32;
 pub const SDLK_q: i32 = b'q' as i32;
+pub const SDLK_f: i32 = b'f' as i32;
 pub const SDLK_RIGHT: i32 = (79 | SDLK_SCANCODE_MASK) as i32;
 pub const SDLK_LEFT: i32 = (80 | SDLK_SCANCODE_MASK) as i32;
 pub const SDLK_DOWN: i32 = (81 | SDLK_SCANCODE_MASK) as i32;
@@ -192,6 +193,14 @@ pub type Fn_SDL_CreateWindow = unsafe extern "C" fn(
     flags: u32,
 ) -> *mut c_void;
 pub type Fn_SDL_DestroyWindow = unsafe extern "C" fn(window: *mut c_void);
+pub type Fn_SDL_SetWindowFullscreen =
+    unsafe extern "C" fn(window: *mut c_void, flags: u32) -> c_int;
+pub type Fn_SDL_GetWindowFlags = unsafe extern "C" fn(window: *mut c_void) -> u32;
+
+/// `SDL_WINDOW_FULLSCREEN_DESKTOP` — borderless fullscreen at the
+/// current desktop resolution (no mode switch). Combined form of
+/// `SDL_WINDOW_FULLSCREEN | 0x1000`.
+pub const SDL_WINDOW_FULLSCREEN_DESKTOP: u32 = 0x0000_1001;
 pub type Fn_SDL_CreateRenderer =
     unsafe extern "C" fn(window: *mut c_void, index: c_int, flags: u32) -> *mut c_void;
 pub type Fn_SDL_DestroyRenderer = unsafe extern "C" fn(renderer: *mut c_void);
@@ -227,6 +236,8 @@ pub type Fn_SDL_RenderCopy = unsafe extern "C" fn(
     dstrect: *const SDL_Rect,
 ) -> c_int;
 pub type Fn_SDL_RenderPresent = unsafe extern "C" fn(renderer: *mut c_void);
+pub type Fn_SDL_GetRendererOutputSize =
+    unsafe extern "C" fn(renderer: *mut c_void, w: *mut c_int, h: *mut c_int) -> c_int;
 
 pub type Fn_SDL_PollEvent = unsafe extern "C" fn(event: *mut SDL_Event) -> c_int;
 pub type Fn_SDL_PumpEvents = unsafe extern "C" fn();
@@ -257,6 +268,8 @@ pub struct Sdl2Lib {
 
     pub SDL_CreateWindow: Fn_SDL_CreateWindow,
     pub SDL_DestroyWindow: Fn_SDL_DestroyWindow,
+    pub SDL_SetWindowFullscreen: Fn_SDL_SetWindowFullscreen,
+    pub SDL_GetWindowFlags: Fn_SDL_GetWindowFlags,
     pub SDL_CreateRenderer: Fn_SDL_CreateRenderer,
     pub SDL_DestroyRenderer: Fn_SDL_DestroyRenderer,
     pub SDL_CreateTexture: Fn_SDL_CreateTexture,
@@ -266,6 +279,7 @@ pub struct Sdl2Lib {
     pub SDL_RenderClear: Fn_SDL_RenderClear,
     pub SDL_RenderCopy: Fn_SDL_RenderCopy,
     pub SDL_RenderPresent: Fn_SDL_RenderPresent,
+    pub SDL_GetRendererOutputSize: Fn_SDL_GetRendererOutputSize,
 
     pub SDL_PollEvent: Fn_SDL_PollEvent,
     pub SDL_PumpEvents: Fn_SDL_PumpEvents,
@@ -342,6 +356,11 @@ impl Sdl2Lib {
             SDL_ClearQueuedAudio: sym!(Fn_SDL_ClearQueuedAudio, "SDL_ClearQueuedAudio"),
             SDL_CreateWindow: sym!(Fn_SDL_CreateWindow, "SDL_CreateWindow"),
             SDL_DestroyWindow: sym!(Fn_SDL_DestroyWindow, "SDL_DestroyWindow"),
+            SDL_SetWindowFullscreen: sym!(
+                Fn_SDL_SetWindowFullscreen,
+                "SDL_SetWindowFullscreen"
+            ),
+            SDL_GetWindowFlags: sym!(Fn_SDL_GetWindowFlags, "SDL_GetWindowFlags"),
             SDL_CreateRenderer: sym!(Fn_SDL_CreateRenderer, "SDL_CreateRenderer"),
             SDL_DestroyRenderer: sym!(Fn_SDL_DestroyRenderer, "SDL_DestroyRenderer"),
             SDL_CreateTexture: sym!(Fn_SDL_CreateTexture, "SDL_CreateTexture"),
@@ -351,6 +370,10 @@ impl Sdl2Lib {
             SDL_RenderClear: sym!(Fn_SDL_RenderClear, "SDL_RenderClear"),
             SDL_RenderCopy: sym!(Fn_SDL_RenderCopy, "SDL_RenderCopy"),
             SDL_RenderPresent: sym!(Fn_SDL_RenderPresent, "SDL_RenderPresent"),
+            SDL_GetRendererOutputSize: sym!(
+                Fn_SDL_GetRendererOutputSize,
+                "SDL_GetRendererOutputSize"
+            ),
             SDL_PollEvent: sym!(Fn_SDL_PollEvent, "SDL_PollEvent"),
             SDL_PumpEvents: sym!(Fn_SDL_PumpEvents, "SDL_PumpEvents"),
             SDL_Delay: sym!(Fn_SDL_Delay, "SDL_Delay"),

@@ -29,6 +29,14 @@ pub struct VideoRenderer {
     dims: Option<(u32, u32)>,
     textures: Option<YuvTextures>,
     bind_group: Option<wgpu::BindGroup>,
+    /// Uniform buffer carrying the aspect-ratio letterbox scale + offset
+    /// that the shader uses to decide where the content rectangle sits
+    /// inside the surface.
+    uniform_buffer: wgpu::Buffer,
+    /// Whether we've already printed the "downscaling content" notice.
+    /// One-shot so we don't spam the log on every frame of e.g. an
+    /// 8 K source on a 4 K-limit adapter.
+    warned_downscale: bool,
 }
 
 struct YuvTextures {
@@ -153,6 +161,17 @@ impl VideoRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // aspect-ratio uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -207,6 +226,18 @@ impl VideoRenderer {
             ..Default::default()
         });
 
+        // 16 bytes: one vec4<f32> aspect-ratio uniform.
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("yuv-uniform"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Default: no letterboxing (content fills the viewport). This
+        // gets overwritten on the first render call once we know the
+        // content dims.
+        queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&[1.0_f32, 1.0, 0.0, 0.0]));
+
         Ok(Self {
             device,
             queue,
@@ -219,6 +250,8 @@ impl VideoRenderer {
             dims: None,
             textures: None,
             bind_group: None,
+            uniform_buffer,
+            warned_downscale: false,
         })
     }
 
@@ -229,20 +262,53 @@ impl VideoRenderer {
     }
 
     pub fn render(&mut self, frame: &VideoFrame) -> Result<()> {
-        let w = frame.width;
-        let h = frame.height;
-        if w == 0 || h == 0 {
+        let src_w = frame.width;
+        let src_h = frame.height;
+        if src_w == 0 || src_h == 0 {
             return Ok(());
         }
-        if self.dims != Some((w, h)) {
-            self.create_textures(w, h);
-            self.dims = Some((w, h));
+
+        // If the source exceeds the adapter's texture limit, fall back
+        // to an integer-factor box downsample so we never hand wgpu a
+        // dimension it can't honour. Keeps the full content visible at
+        // reduced resolution instead of cropping or panicking.
+        let (y_data, u_data, v_data, plane_w, plane_h) =
+            prepare_planes(frame, self.max_texture_dim, &mut self.warned_downscale);
+        if plane_w == 0 || plane_h == 0 {
+            return Ok(());
         }
 
-        let (y_data, u_data, v_data) = to_yuv420p(frame);
-        self.upload_plane(PlaneKind::Y, w, h, &y_data);
-        self.upload_plane(PlaneKind::U, w / 2, h / 2, &u_data);
-        self.upload_plane(PlaneKind::V, w / 2, h / 2, &v_data);
+        if self.dims != Some((plane_w, plane_h)) {
+            self.create_textures(plane_w, plane_h);
+            self.dims = Some((plane_w, plane_h));
+        }
+
+        self.upload_plane(PlaneKind::Y, plane_w, plane_h, &y_data);
+        self.upload_plane(PlaneKind::U, plane_w / 2, plane_h / 2, &u_data);
+        self.upload_plane(PlaneKind::V, plane_w / 2, plane_h / 2, &v_data);
+
+        // Update the letterbox uniform so the shader scales the content
+        // rectangle to fit the surface while preserving the source
+        // aspect ratio (pillar bars for wide content in a tall window,
+        // letter bars for tall content in a wide window). We use the
+        // SOURCE aspect (src_w / src_h) rather than the potentially
+        // downsampled plane_w/plane_h so the content isn't squashed
+        // when we've had to downsample to fit the texture limit.
+        let surface_aspect = self.surface_cfg.width as f32 / self.surface_cfg.height.max(1) as f32;
+        let content_aspect = src_w as f32 / src_h.max(1) as f32;
+        let (sx, sy, ox, oy) = if content_aspect > surface_aspect {
+            // Content is wider than surface — letterbox (black bars top/bottom).
+            let h_frac = surface_aspect / content_aspect;
+            let off_y = (1.0 - h_frac) * 0.5;
+            (1.0, 1.0 / h_frac, 0.0, off_y)
+        } else {
+            // Content is taller than surface (or matches) — pillarbox.
+            let w_frac = content_aspect / surface_aspect;
+            let off_x = (1.0 - w_frac) * 0.5;
+            (1.0 / w_frac, 1.0, off_x, 0.0)
+        };
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[sx, sy, ox, oy]));
 
         let frame_tex = match self.surface.get_current_texture() {
             Ok(t) => t,
@@ -316,6 +382,10 @@ impl VideoRenderer {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -378,4 +448,70 @@ enum PlaneKind {
     Y,
     U,
     V,
+}
+
+/// Prepare YUV 4:2:0 planes sized to fit within `max_dim`. If the source
+/// frame is larger than the limit, box-downsample all three planes by an
+/// integer factor chosen so the largest dimension lands ≤ `max_dim`. The
+/// output width/height are rounded down to even so the chroma
+/// half-resolution math works.
+fn prepare_planes(
+    frame: &VideoFrame,
+    max_dim: u32,
+    warned: &mut bool,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>, u32, u32) {
+    let (mut y, mut u, mut v) = to_yuv420p(frame);
+    let mut w = frame.width;
+    let mut h = frame.height;
+    // Y is w×h, U/V are (w/2)×(h/2). `max_dim` caps the Y plane.
+    let longest = w.max(h);
+    if longest <= max_dim {
+        return (y, u, v, w, h);
+    }
+    // Smallest integer factor N such that ceil(longest / N) ≤ max_dim.
+    let scale = longest.div_ceil(max_dim).max(2);
+    let new_w = (w / scale) & !1;
+    let new_h = (h / scale) & !1;
+    if new_w == 0 || new_h == 0 {
+        return (Vec::new(), Vec::new(), Vec::new(), 0, 0);
+    }
+    if !*warned {
+        eprintln!(
+            "oxideplay: source {}×{} exceeds GPU max texture dim {}; \
+             downscaling to {}×{}",
+            w, h, max_dim, new_w, new_h
+        );
+        *warned = true;
+    }
+    y = box_downsample(&y, w as usize, h as usize, scale as usize);
+    u = box_downsample(&u, (w / 2) as usize, (h / 2) as usize, scale as usize);
+    v = box_downsample(&v, (w / 2) as usize, (h / 2) as usize, scale as usize);
+    w = new_w;
+    h = new_h;
+    (y, u, v, w, h)
+}
+
+/// Integer-factor box filter. Averages each `factor × factor` block of
+/// the input plane into one output byte.
+fn box_downsample(src: &[u8], src_w: usize, src_h: usize, factor: usize) -> Vec<u8> {
+    if factor <= 1 {
+        return src.to_vec();
+    }
+    let out_w = src_w / factor;
+    let out_h = src_h / factor;
+    let mut out = Vec::with_capacity(out_w * out_h);
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let mut acc = 0u32;
+            for dy in 0..factor {
+                for dx in 0..factor {
+                    let sx = ox * factor + dx;
+                    let sy = oy * factor + dy;
+                    acc += src[sy * src_w + sx] as u32;
+                }
+            }
+            out.push((acc / (factor * factor) as u32) as u8);
+        }
+    }
+    out
 }

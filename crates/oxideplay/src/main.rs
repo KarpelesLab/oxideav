@@ -64,10 +64,10 @@ struct Cli {
     #[arg(long, default_value_t = 0)]
     threads: usize,
 
-    /// Output backend. `sdl2` (default) soft-loads libSDL2 at runtime.
-    /// `winit` uses the pure-Rust winit + wgpu + cpal stack (compiled
-    /// in by default; build with `--no-default-features` to drop it).
-    #[arg(long, value_enum, default_value_t = Backend::Sdl2)]
+    /// Output backend. Defaults to `winit` (pure-Rust winit + wgpu +
+    /// cpal stack, compiled in by default). `sdl2` soft-loads libSDL2
+    /// at runtime for the legacy path.
+    #[arg(long, value_enum, default_value_t = default_backend())]
     backend: Backend,
 }
 
@@ -76,6 +76,19 @@ enum Backend {
     Sdl2,
     #[cfg(feature = "winit")]
     Winit,
+}
+
+/// Pick the default backend. Prefer winit when it's compiled in; fall
+/// back to SDL2 on `--no-default-features` builds.
+const fn default_backend() -> Backend {
+    #[cfg(feature = "winit")]
+    {
+        Backend::Winit
+    }
+    #[cfg(not(feature = "winit"))]
+    {
+        Backend::Sdl2
+    }
 }
 
 fn main() -> ExitCode {

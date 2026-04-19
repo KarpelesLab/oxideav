@@ -15,7 +15,7 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::driver::{OutputDriver, PlayerEvent, SeekDir};
 use crate::drivers::winit_audio::AudioOut;
@@ -113,7 +113,19 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::KeyboardInput { event: key, .. }
                 if key.state == ElementState::Pressed && !key.repeat =>
             {
-                if let Some(pe) = map_key(&key) {
+                // F toggles borderless fullscreen. Handled locally in
+                // the driver — the player core has no business knowing
+                // about window chrome.
+                if matches!(key.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
+                    if let Some(w) = self.window.as_ref() {
+                        let next = if w.fullscreen().is_some() {
+                            None
+                        } else {
+                            Some(Fullscreen::Borderless(None))
+                        };
+                        w.set_fullscreen(next);
+                    }
+                } else if let Some(pe) = map_key(&key) {
                     self.pending.push(pe);
                 }
             }
