@@ -189,7 +189,6 @@ fn run_loop<D: OutputDriver>(
 ) -> oxideav_core::Result<()> {
     let tick_interval = Duration::from_millis(16);
     let status_interval = Duration::from_secs(1);
-    let max_buffer = Duration::from_secs(2);
 
     loop {
         // Gather events from driver + tui. tui::poll_events with a
@@ -211,19 +210,12 @@ fn run_loop<D: OutputDriver>(
             break;
         }
 
-        // Pump the pipeline.
-        let buffered_secs = Duration::from_secs_f64(
-            play.driver.audio_queue_len_samples() as f64
-                / media
-                    .audio
-                    .as_ref()
-                    .and_then(|a| a.params.sample_rate)
-                    .unwrap_or(48_000)
-                    .max(1) as f64,
-        );
-        if !play.paused() && !play.eof_reached() && buffered_secs < max_buffer {
-            let _ = play.pump_once()?;
-        }
+        // Drain the decode worker on every tick. Back-pressure already
+        // lives in the worker's bounded output channel — gating the
+        // drain by the audio-queue depth here would starve the channel
+        // and stall the audio decoder, which in turn starves SDL and
+        // causes choppy playback.
+        let _ = play.pump_once()?;
 
         if play.eof_reached() && play.audio_drained() && !play.paused() {
             break;
@@ -231,6 +223,14 @@ fn run_loop<D: OutputDriver>(
 
         // Status output.
         let now = Instant::now();
+        let snap = play.timings();
+        let tui_snap = tui::PlayerTimings {
+            audio: snap.audio,
+            video_decoded: snap.video_decoded,
+            video_presented: snap.video_presented,
+            video_queue_len: snap.video_queue_len,
+        };
+        let drift_str = tui::format_drift(snap.master, &tui_snap);
         if now.duration_since(*last_status) >= status_interval {
             if tui_guard.is_some() {
                 let _ = tui::draw_status(
@@ -239,6 +239,7 @@ fn run_loop<D: OutputDriver>(
                     play.paused(),
                     play.volume(),
                     *seek_supported,
+                    Some(&drift_str),
                 );
             } else {
                 let dur = media
@@ -246,10 +247,11 @@ fn run_loop<D: OutputDriver>(
                     .map(tui::format_duration)
                     .unwrap_or_else(|| "?".into());
                 eprintln!(
-                    "oxideplay: {} / {}  vol {:>3}%{}",
+                    "oxideplay: {} / {}  vol {:>3}%  {}{}",
                     tui::format_duration(play.position()),
                     dur,
                     (play.volume() * 100.0).round() as i32,
+                    drift_str,
                     if play.paused() { "  [paused]" } else { "" },
                 );
             }
@@ -262,6 +264,7 @@ fn run_loop<D: OutputDriver>(
                 play.paused(),
                 play.volume(),
                 *seek_supported,
+                Some(&drift_str),
             );
         }
 

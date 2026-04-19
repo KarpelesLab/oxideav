@@ -48,6 +48,27 @@ pub struct Player<D: OutputDriver> {
     /// after issuing a seek. While `true`, Audio/Video units arriving
     /// in the channel predate the seek and must be discarded.
     seek_pending: bool,
+    /// pts of the most recent audio frame we queued to the driver.
+    /// Used for the TUI drift display.
+    last_audio_pts: Option<i64>,
+    /// pts of the most recent video frame pushed into `video_queue`
+    /// (i.e. the newest thing the worker produced, not the newest
+    /// frame presented).
+    last_video_pts: Option<i64>,
+    /// pts of the most recent video frame actually handed to
+    /// `driver.present_video`.
+    last_video_presented_pts: Option<i64>,
+}
+
+/// Diagnostic timestamps for the TUI. All Durations are relative to
+/// the start of the stream (i.e. `tb.seconds_of(pts)`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlayerTimings {
+    pub master: Duration,
+    pub audio: Option<Duration>,
+    pub video_decoded: Option<Duration>,
+    pub video_presented: Option<Duration>,
+    pub video_queue_len: usize,
 }
 
 /// Summary info about what we'll play.
@@ -222,9 +243,32 @@ impl<D: OutputDriver> Player<D> {
                 volume: 1.0,
                 eof: false,
                 seek_pending: false,
+                last_audio_pts: None,
+                last_video_pts: None,
+                last_video_presented_pts: None,
             },
             opened,
         ))
+    }
+
+    /// Snapshot of per-stream timestamps for the TUI's drift display.
+    pub fn timings(&self) -> PlayerTimings {
+        fn to_dur(pts: Option<i64>, s: Option<&StreamInfo>) -> Option<Duration> {
+            let (p, s) = (pts?, s?);
+            let secs = s.time_base.seconds_of(p);
+            if secs.is_finite() && secs >= 0.0 {
+                Some(Duration::from_secs_f64(secs))
+            } else {
+                None
+            }
+        }
+        PlayerTimings {
+            master: self.position(),
+            audio: to_dur(self.last_audio_pts, self.audio_stream.as_ref()),
+            video_decoded: to_dur(self.last_video_pts, self.video_stream.as_ref()),
+            video_presented: to_dur(self.last_video_presented_pts, self.video_stream.as_ref()),
+            video_queue_len: self.video_queue.len(),
+        }
     }
 
     pub fn position(&self) -> Duration {
@@ -371,6 +415,9 @@ impl<D: OutputDriver> Player<D> {
                         // Pre-seek payload; discard.
                         continue;
                     }
+                    if let Some(p) = af.pts {
+                        self.last_audio_pts = Some(p);
+                    }
                     // Driver is SDL-backed; queue_audio pushes into its
                     // ring buffer which the OS audio device drains at
                     // the output rate. This is the master clock.
@@ -379,6 +426,9 @@ impl<D: OutputDriver> Player<D> {
                 DecodedUnit::Video(vf) => {
                     if self.seek_pending {
                         continue;
+                    }
+                    if let Some(p) = vf.pts {
+                        self.last_video_pts = Some(p);
                     }
                     self.video_queue.push_back(vf);
                     self.trim_video_queue();
@@ -422,6 +472,7 @@ impl<D: OutputDriver> Player<D> {
             // (better to jump-cut than freeze) unless the backlog is
             // large; `trim_video_queue` handles that case up front.
             let vf = self.video_queue.pop_front().unwrap();
+            self.last_video_presented_pts = vf.pts;
             self.driver.present_video(&vf)?;
             activity = true;
         }

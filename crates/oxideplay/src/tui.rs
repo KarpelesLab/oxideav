@@ -57,12 +57,18 @@ impl Drop for TuiGuard {
 
 /// Render one status line at the current cursor row. Overwrites any
 /// previous content on the line.
+///
+/// `drift` — when `Some`, a formatted per-stream timestamp string is
+/// appended after the volume. The caller formats via
+/// [`format_drift`] so this module doesn't depend on the player's
+/// internal types.
 pub fn draw_status(
     position: Duration,
     duration: Option<Duration>,
     paused: bool,
     volume: f32,
     seek_enabled: bool,
+    drift: Option<&str>,
 ) -> io::Result<()> {
     let mut out = io::stdout();
     queue!(
@@ -77,17 +83,72 @@ pub fn draw_status(
     } else {
         "[q]quit [space]pause [/ *]vol"
     };
-    write!(
-        out,
-        "{} {} / {}  vol {:>3}%  {}",
-        state,
-        format_duration(position),
-        dur_str,
-        (volume * 100.0).round() as i32,
-        hints,
-    )?;
+    if let Some(d) = drift {
+        write!(
+            out,
+            "{} {} / {}  vol {:>3}%  {}  {}",
+            state,
+            format_duration(position),
+            dur_str,
+            (volume * 100.0).round() as i32,
+            d,
+            hints,
+        )?;
+    } else {
+        write!(
+            out,
+            "{} {} / {}  vol {:>3}%  {}",
+            state,
+            format_duration(position),
+            dur_str,
+            (volume * 100.0).round() as i32,
+            hints,
+        )?;
+    }
     out.flush()?;
     Ok(())
+}
+
+/// Format a per-stream timing snapshot for the status line.
+///
+/// Output looks like `A +0.02 V +0.04 (dec +0.08, q=6)` — each
+/// stream's offset relative to the master clock in seconds, with the
+/// decoded-but-not-yet-presented video gap and the video queue depth
+/// at the end.
+pub fn format_drift(master: Duration, timings: &PlayerTimings) -> String {
+    fn signed_secs(d: Duration, base: Duration) -> f64 {
+        d.as_secs_f64() - base.as_secs_f64()
+    }
+    let mut out = String::new();
+    out.push_str("A ");
+    match timings.audio {
+        Some(a) => out.push_str(&format!("{:+.2}", signed_secs(a, master))),
+        None => out.push_str(" —  "),
+    }
+    out.push_str(" V ");
+    match timings.video_presented {
+        Some(v) => out.push_str(&format!("{:+.2}", signed_secs(v, master))),
+        None => out.push_str(" —  "),
+    }
+    if let Some(v) = timings.video_decoded {
+        out.push_str(&format!(
+            " (dec {:+.2}, q={})",
+            signed_secs(v, master),
+            timings.video_queue_len
+        ));
+    }
+    out
+}
+
+/// Subset of `player::PlayerTimings` the TUI cares about. Kept here
+/// to avoid a circular dependency with the player module at compile
+/// time — main.rs converts.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlayerTimings {
+    pub audio: Option<Duration>,
+    pub video_decoded: Option<Duration>,
+    pub video_presented: Option<Duration>,
+    pub video_queue_len: usize,
 }
 
 /// Format a Duration as `MM:SS.cc`.
