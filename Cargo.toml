@@ -78,7 +78,7 @@ oxideav-prores = { path = "crates/oxideav-prores", version = "0.0" }
 oxideav-jpegxl = { path = "crates/oxideav-jpegxl", version = "0.0" }
 oxideav-jpeg2000 = { path = "crates/oxideav-jpeg2000", version = "0.0" }
 oxideav-avif = { path = "crates/oxideav-avif", version = "0.0" }
-oxideav-source = { path = "crates/oxideav-source", version = "0.0" }
+oxideav-source = { path = "crates/oxideav-source", version = "0.1" }
 oxideav-http = { path = "crates/oxideav-http", version = "0.0" }
 
 # The aggregator crate stays in this workspace (it's the "everything
