@@ -13,7 +13,7 @@ use oxideav_core::{AudioFrame, Error, Result, VideoFrame};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
@@ -115,8 +115,10 @@ impl ApplicationHandler for WinitApp {
             {
                 // F toggles borderless fullscreen. Handled locally in
                 // the driver — the player core has no business knowing
-                // about window chrome.
-                if matches!(key.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
+                // about window chrome. Check the logical key so AZERTY
+                // / DVORAK / etc. layouts bind the letter F rather than
+                // the physical position of "f" on a US keyboard.
+                if is_logical_char(&key, 'f') {
                     if let Some(w) = self.window.as_ref() {
                         let next = if w.fullscreen().is_some() {
                             None
@@ -141,12 +143,73 @@ impl ApplicationHandler for WinitApp {
 }
 
 fn map_key(ev: &KeyEvent) -> Option<PlayerEvent> {
+    // Character bindings: match the *logical* key so the typed letter
+    // is what binds, independent of keyboard layout. E.g. on AZERTY,
+    // pressing the "a" key still types 'a' and the "q" key still types
+    // 'q' — `PhysicalKey::KeyQ` would however be where "a" lives.
+    if is_logical_char(ev, 'q') {
+        return Some(PlayerEvent::Quit);
+    }
+    if is_logical_char(ev, '*') {
+        return Some(PlayerEvent::VolumeDelta(5));
+    }
+    if is_logical_char(ev, '/') {
+        return Some(PlayerEvent::VolumeDelta(-5));
+    }
+
+    // Named / positional keys: look up by logical `NamedKey` when set;
+    // otherwise fall through to the physical code (handles some layouts
+    // that don't report a logical name for arrows / PageUp etc.).
+    if let Key::Named(named) = &ev.logical_key {
+        match named {
+            NamedKey::Escape => return Some(PlayerEvent::Quit),
+            NamedKey::Space => return Some(PlayerEvent::TogglePause),
+            NamedKey::ArrowLeft => {
+                return Some(PlayerEvent::SeekRelative(
+                    Duration::from_secs(10),
+                    SeekDir::Back,
+                ))
+            }
+            NamedKey::ArrowRight => {
+                return Some(PlayerEvent::SeekRelative(
+                    Duration::from_secs(10),
+                    SeekDir::Forward,
+                ))
+            }
+            NamedKey::ArrowUp => {
+                return Some(PlayerEvent::SeekRelative(
+                    Duration::from_secs(60),
+                    SeekDir::Forward,
+                ))
+            }
+            NamedKey::ArrowDown => {
+                return Some(PlayerEvent::SeekRelative(
+                    Duration::from_secs(60),
+                    SeekDir::Back,
+                ))
+            }
+            NamedKey::PageUp => {
+                return Some(PlayerEvent::SeekRelative(
+                    Duration::from_secs(600),
+                    SeekDir::Forward,
+                ))
+            }
+            NamedKey::PageDown => {
+                return Some(PlayerEvent::SeekRelative(
+                    Duration::from_secs(600),
+                    SeekDir::Back,
+                ))
+            }
+            _ => {}
+        }
+    }
+
     let code = match ev.physical_key {
         PhysicalKey::Code(c) => c,
         _ => return None,
     };
     match code {
-        KeyCode::Escape | KeyCode::KeyQ => Some(PlayerEvent::Quit),
+        KeyCode::Escape => Some(PlayerEvent::Quit),
         KeyCode::Space => Some(PlayerEvent::TogglePause),
         KeyCode::ArrowLeft => Some(PlayerEvent::SeekRelative(
             Duration::from_secs(10),
@@ -176,6 +239,18 @@ fn map_key(ev: &KeyEvent) -> Option<PlayerEvent> {
         KeyCode::NumpadDivide => Some(PlayerEvent::VolumeDelta(-5)),
         _ => None,
     }
+}
+
+/// Check whether the event's *logical* key is the given character
+/// (case-insensitive). Uses `key_without_modifiers` so Shift+Q also
+/// matches 'q'.
+fn is_logical_char(ev: &KeyEvent, expected: char) -> bool {
+    let Key::Character(s) = &ev.logical_key else {
+        return false;
+    };
+    s.chars()
+        .next()
+        .is_some_and(|c| c.eq_ignore_ascii_case(&expected))
 }
 
 impl OutputDriver for WinitWgpuDriver {
