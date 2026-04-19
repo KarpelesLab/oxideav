@@ -464,11 +464,21 @@ impl<D: OutputDriver> Player<D> {
             return Ok(activity);
         }
 
-        // Phase 2 — present video frames whose pts has reached the wallclock.
+        // Phase 2 — present at most ONE video frame per tick whose pts
+        // has reached the wallclock. SDL's present path can take
+        // 5-20 ms per call (YUV upload + renderer present); presenting
+        // several in a row would block this thread for >100 ms, during
+        // which the worker's bounded output channel fills, the audio
+        // decoder blocks on send, and SDL underruns its audio queue.
+        //
+        // If the decoder has produced a lot of future frames (e.g.
+        // after preroll) the extras sit in `video_queue` and come out
+        // one per tick. Stale frames are trimmed by `trim_video_queue`
+        // when new ones arrive.
         let now = self.position();
         let video_tb = self.video_stream.as_ref().map(|s| s.time_base);
         let epsilon = Duration::from_millis(50);
-        while let Some(vf) = self.video_queue.front() {
+        if let Some(vf) = self.video_queue.front() {
             let pts_secs = match (vf.pts, video_tb) {
                 (Some(p), Some(tb)) => tb.seconds_of(p),
                 _ => 0.0,
@@ -478,17 +488,12 @@ impl<D: OutputDriver> Player<D> {
             } else {
                 Duration::ZERO
             };
-            if target > now + epsilon {
-                // Not yet time.
-                break;
+            if target <= now + epsilon {
+                let vf = self.video_queue.pop_front().unwrap();
+                self.last_video_presented_pts = vf.pts;
+                self.driver.present_video(&vf)?;
+                activity = true;
             }
-            // Pop + present. If the frame is too old we still display it
-            // (better to jump-cut than freeze) unless the backlog is
-            // large; `trim_video_queue` handles that case up front.
-            let vf = self.video_queue.pop_front().unwrap();
-            self.last_video_presented_pts = vf.pts;
-            self.driver.present_video(&vf)?;
-            activity = true;
         }
 
         Ok(activity)
