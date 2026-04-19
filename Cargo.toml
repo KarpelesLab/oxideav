@@ -83,6 +83,7 @@ oxideav-http = { path = "crates/oxideav-http", version = "0.0" }
 oxideav-sysaudio = { path = "crates/oxideav-sysaudio", version = "0.0" }
 oxideav-bmp = { path = "crates/oxideav-bmp", version = "0.1" }
 oxideav-ico = { path = "crates/oxideav-ico", version = "0.0" }
+oxideav-rtmp = { path = "crates/oxideav-rtmp", version = "0.0" }
 
 # The aggregator crate stays in this workspace (it's the "everything
 # wired up" entry point for the CLI / player / integration tests).
@@ -161,3 +162,4 @@ oxideav-http = { path = "crates/oxideav-http" }
 oxideav-sysaudio = { path = "crates/oxideav-sysaudio" }
 oxideav-bmp = { path = "crates/oxideav-bmp" }
 oxideav-ico = { path = "crates/oxideav-ico" }
+oxideav-rtmp = { path = "crates/oxideav-rtmp" }

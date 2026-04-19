@@ -1770,7 +1770,7 @@ dependencies = [
 
 [[package]]
 name = "oxideav-h264"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "oxideav-codec",
  "oxideav-core",
@@ -1993,6 +1993,10 @@ dependencies = [
  "oxideav-codec",
  "oxideav-core",
 ]
+
+[[package]]
+name = "oxideav-rtmp"
+version = "0.0.1"
 
 [[package]]
 name = "oxideav-s3m"
