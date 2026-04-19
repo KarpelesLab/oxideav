@@ -43,7 +43,7 @@ oxideav-mpeg12video = { path = "crates/oxideav-mpeg12video", version = "0.0" }
 oxideav-vp9 = { path = "crates/oxideav-vp9", version = "0.0" }
 oxideav-h265 = { path = "crates/oxideav-h265", version = "0.0" }
 oxideav-h264 = { path = "crates/oxideav-h264", version = "0.0" }
-oxideav-av1 = { path = "crates/oxideav-av1", version = "0.0" }
+oxideav-av1 = { path = "crates/oxideav-av1", version = "0.1" }
 oxideav-h263 = { path = "crates/oxideav-h263", version = "0.0" }
 oxideav-vp8 = { path = "crates/oxideav-vp8", version = "0.0" }
 oxideav-audio-filter = { path = "crates/oxideav-audio-filter", version = "0.0" }
