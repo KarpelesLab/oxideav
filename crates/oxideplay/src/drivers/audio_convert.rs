@@ -3,7 +3,7 @@
 //! The `oxideav` core audio model admits many sample formats (U8/S8/
 //! S16/S24/S32/F32/F64 in interleaved or planar layouts) and decoders
 //! emit whatever their native format is. Both the SDL2 and the
-//! winit+cpal drivers feed the OS a single normalised f32 interleaved
+//! winit+sysaudio drivers feed the OS a single normalised f32 interleaved
 //! stream, so the conversion + resampling + up/down-mix logic lives
 //! here once.
 

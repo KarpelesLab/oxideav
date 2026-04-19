@@ -1,5 +1,6 @@
 //! Pure-Rust `OutputDriver` implementation using winit (windowing),
-//! wgpu (rendering), and cpal (audio).
+//! wgpu (rendering), and oxideav-sysaudio (audio — runtime-loaded
+//! ALSA / PulseAudio / WASAPI / CoreAudio).
 //!
 //! The driver owns the winit `EventLoop` and a persistent
 //! `ApplicationHandler`. `poll_events` pumps the event loop

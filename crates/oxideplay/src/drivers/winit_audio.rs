@@ -1,17 +1,25 @@
-//! cpal-backed audio output for the winit driver.
+//! `oxideav-sysaudio`-backed audio output for the winit driver.
 //!
-//! cpal opens a pulled-callback output stream; we feed it from a
-//! lock-free SPSC ring buffer that `queue_audio` fills. The callback
-//! increments a `samples_played` atomic counter which the driver
-//! reports as the audio master clock.
+//! `sysaudio` dlopen's the native audio API at runtime (ALSA,
+//! PulseAudio, WASAPI, CoreAudio, …) so `oxideplay` stops listing
+//! `libasound.so.2` in its ELF NEEDED entries. The backend gives us a
+//! pull-callback; we feed it from a lock-free SPSC ring buffer that
+//! `queue_audio` fills on the main thread. The callback increments a
+//! `samples_played` atomic that the driver reports as the audio master
+//! clock.
+//!
+//! The default driver is picked by `oxideav_sysaudio::probe()` — on
+//! Linux that's PulseAudio when a server is running, otherwise ALSA.
+//! Users can force a specific driver via the `OXIDEPLAY_AUDIO_DRIVER`
+//! environment variable (set to `pulse`, `alsa`, `wasapi`, …).
 
+use std::env;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
 use oxideav_core::{AudioFrame, Error, Result};
+use oxideav_sysaudio::{self as sysaudio, StreamRequest};
 use ringbuf::{
     traits::{Consumer, Observer, Producer, Split},
     HeapRb,
@@ -20,9 +28,9 @@ use ringbuf::{
 use crate::drivers::audio_convert::{resample_linear, to_f32_interleaved};
 
 pub struct AudioOut {
-    // Kept alive so the cpal callback keeps running. No direct access
-    // to the inner data.
-    _stream: cpal::Stream,
+    // Kept alive so the sysaudio callback keeps running. No direct
+    // access to the inner data.
+    _stream: sysaudio::Stream,
 
     producer: ringbuf::HeapProd<f32>,
 
@@ -51,22 +59,20 @@ pub struct AudioOut {
 }
 
 impl AudioOut {
-    /// Open cpal's default output device. Prefers exact-match on
-    /// (sample_rate, channels, F32); otherwise falls back to the
-    /// device's default config and enables on-the-fly resampling.
+    /// Open an output stream on the platform's preferred audio backend.
+    /// Respects `OXIDEPLAY_AUDIO_DRIVER=<name>` for explicit override.
     pub fn new(sample_rate: u32, channels: u16) -> Result<Self> {
         let channels = channels.clamp(1, 2);
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| Error::other("cpal: no default output device"))?;
+        let driver = select_driver()?;
 
-        let (config, device_rate, device_channels) = pick_config(&device, sample_rate, channels)?;
-        let resample_from = (device_rate != sample_rate).then_some(sample_rate);
+        // The backend decides the actual device rate; we'll resample on
+        // the producer side if it doesn't match `sample_rate`.
+        let req = StreamRequest::new(sample_rate, channels);
 
-        // Ring-buffer sized to ~4 s of audio — the main-thread decode
-        // pump tops it up every tick.
-        let capacity = (device_rate as usize * device_channels as usize * 4).max(8192);
+        // Pre-allocate the ring buffer. We don't yet know the device
+        // rate until after open(), so size conservatively — worst-case
+        // 192 kHz × 2 ch × 4 s = 1.5M samples ≈ 6 MB of f32. Cheap.
+        let capacity = ((sample_rate.max(48_000) as usize) * channels as usize * 4).max(8192);
         let rb = HeapRb::<f32>::new(capacity);
         let (producer, mut consumer) = rb.split();
 
@@ -77,32 +83,33 @@ impl AudioOut {
         let callback_ran = Arc::new(AtomicBool::new(false));
         let callback_ran_cb = callback_ran.clone();
 
-        let err_fn = |e| eprintln!("oxideplay: cpal stream error: {e}");
-        let ch = device_channels as usize;
-        let data_cb = move |out: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+        // We need device_channels inside the callback, but we don't
+        // learn it until `open` returns. Capture `channels` (our
+        // requested count) here and patch it up after the fact if the
+        // backend negotiated something else.
+        let ch_cb = channels as usize;
+
+        let stream = sysaudio::open(driver, req, move |out, _info| {
             callback_ran_cb.store(true, Ordering::Relaxed);
             let v = f32::from_bits(volume_cb.load(Ordering::Relaxed));
             let written = consumer.pop_slice(out);
             for s in out[..written].iter_mut() {
                 *s *= v;
             }
-            // Underrun = silence; don't leak stale stack memory.
+            // Underrun = silence; don't leak stale buffer memory.
             out[written..].fill(0.0);
-            samples_played_cb.fetch_add((written / ch) as u64, Ordering::Relaxed);
-        };
+            samples_played_cb.fetch_add((written / ch_cb) as u64, Ordering::Relaxed);
+        })
+        .map_err(|e| Error::other(format!("sysaudio: open({}): {e}", driver.name())))?;
 
-        let stream = device
-            .build_output_stream(&config, data_cb, err_fn, None)
-            .map_err(|e| Error::other(format!("cpal: build_output_stream: {e}")))?;
-        stream
-            .play()
-            .map_err(|e| Error::other(format!("cpal: play: {e}")))?;
+        let fmt = stream.format();
+        let resample_from = (fmt.sample_rate != sample_rate).then_some(sample_rate);
 
         Ok(Self {
             _stream: stream,
             producer,
-            device_rate,
-            device_channels,
+            device_rate: fmt.sample_rate,
+            device_channels: fmt.channels,
             samples_played,
             volume,
             paused: false,
@@ -123,11 +130,9 @@ impl AudioOut {
                 self.device_channels as usize,
             );
         }
-        // 3. Push into the ring. If the ring is full we drop — SDL
-        // behaves similarly (SDL_QueueAudio would succeed but the
-        // output device would just keep playing what's already queued).
-        // In practice the producer beats the consumer and there's
-        // always room.
+        // 3. Push into the ring. If the ring is full we drop — same
+        // behaviour as SDL_QueueAudio: the device keeps consuming what's
+        // already queued. In practice the producer beats the consumer.
         let _ = self.producer.push_slice(&buf);
         Ok(())
     }
@@ -138,6 +143,17 @@ impl AudioOut {
         let secs = samples / rate;
         let nanos = ((samples % rate) * 1_000_000_000 / rate) as u32;
         Duration::new(secs, nanos)
+    }
+
+    /// Current output-side latency as reported by the sysaudio backend:
+    /// how much audio sits "in flight" between `samples_played` being
+    /// incremented and the user actually hearing it. Bluetooth and
+    /// network sinks push this into the hundreds of milliseconds, so
+    /// the video path should subtract this from `master_clock_pos()`
+    /// for accurate A/V sync.
+    #[allow(dead_code)] // consumed by the sync layer once A/V-sync compensation lands
+    pub fn audio_latency(&self) -> Option<Duration> {
+        self._stream.latency()
     }
 
     pub fn set_paused(&mut self, paused: bool) {
@@ -164,43 +180,21 @@ impl AudioOut {
     }
 }
 
-/// Pick a `StreamConfig` closest to the caller's request. Returns
-/// (config, actual_rate, actual_channels).
-fn pick_config(
-    device: &cpal::Device,
-    want_rate: u32,
-    want_channels: u16,
-) -> Result<(StreamConfig, u32, u16)> {
-    let supported = device
-        .supported_output_configs()
-        .map_err(|e| Error::other(format!("cpal: supported_output_configs: {e}")))?
-        .collect::<Vec<_>>();
-
-    // Prefer an exact (rate, channels, F32) match.
-    for cfg in &supported {
-        if cfg.sample_format() == SampleFormat::F32
-            && cfg.channels() == want_channels
-            && cfg.min_sample_rate().0 <= want_rate
-            && cfg.max_sample_rate().0 >= want_rate
-        {
-            let cfg = (*cfg).with_sample_rate(cpal::SampleRate(want_rate));
-            let (ch, rate) = (cfg.channels(), cfg.sample_rate().0);
-            return Ok((cfg.config(), rate, ch));
+/// Resolve the `oxideav-sysaudio` driver to use. Priority:
+///   1. `OXIDEPLAY_AUDIO_DRIVER=<name>` — exact match on backend name,
+///      regardless of whether `probe()` thinks it's ready.
+///   2. `oxideav_sysaudio::default_driver()` — first entry of probe().
+fn select_driver() -> Result<sysaudio::Driver> {
+    if let Ok(name) = env::var("OXIDEPLAY_AUDIO_DRIVER") {
+        let name = name.trim();
+        if !name.is_empty() {
+            return sysaudio::driver_by_name(name).ok_or_else(|| {
+                Error::other(format!(
+                    "OXIDEPLAY_AUDIO_DRIVER={name} — no such sysaudio backend"
+                ))
+            });
         }
     }
-
-    // Fallback: device default.
-    let default = device
-        .default_output_config()
-        .map_err(|e| Error::other(format!("cpal: default_output_config: {e}")))?;
-    if default.sample_format() != SampleFormat::F32 {
-        return Err(Error::other(
-            "cpal: default output is not f32 — not supported yet",
-        ));
-    }
-    let ch = default.channels().clamp(1, 2);
-    let rate = default.sample_rate().0;
-    let mut cfg: StreamConfig = default.into();
-    cfg.channels = ch;
-    Ok((cfg, rate, ch))
+    sysaudio::default_driver()
+        .ok_or_else(|| Error::other("sysaudio: no audio backend is available"))
 }

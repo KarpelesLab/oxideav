@@ -65,8 +65,8 @@ struct Cli {
     threads: usize,
 
     /// Output backend. Defaults to `winit` (pure-Rust winit + wgpu +
-    /// cpal stack, compiled in by default). `sdl2` soft-loads libSDL2
-    /// at runtime for the legacy path.
+    /// oxideav-sysaudio, compiled in by default). `sdl2` soft-loads
+    /// libSDL2 at runtime for the legacy path.
     #[arg(long, value_enum, default_value_t = default_backend())]
     backend: Backend,
 }
