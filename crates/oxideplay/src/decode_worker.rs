@@ -204,19 +204,29 @@ impl DecodeWorker {
     /// is a non-event.
     #[allow(dead_code)]
     pub fn try_recv(&self) -> Option<DecodedUnit> {
-        self.try_recv_subset(true)
+        self.try_recv_subset(true, true)
     }
 
-    /// Like `try_recv` but lets the caller opt out of video. When
-    /// `want_video` is false only audio + control messages are pulled —
-    /// this is how the main thread applies backpressure on the video
-    /// decoder: if its main-thread queue is full, it stops draining the
-    /// video channel, which fills up, which blocks the video decoder's
-    /// `send()`, which stops the decoder from racing ahead.
-    pub fn try_recv_subset(&self, want_video: bool) -> Option<DecodedUnit> {
-        if let Some(rx) = self.audio_rx.as_ref() {
-            if let Ok(af) = rx.try_recv() {
-                return Some(DecodedUnit::Audio(af));
+    /// Like `try_recv` but lets the caller opt out of one or both
+    /// payload streams. Opting out applies back-pressure:
+    ///
+    /// * `want_audio=false` → audio output channel fills → audio
+    ///   decoder blocks on send → audio packet channel fills →
+    ///   demuxer blocks on audio routing. This is how the player
+    ///   enforces a soft cap on buffered audio (stops the pipeline
+    ///   before the sysaudio ringbuf would start dropping samples).
+    ///
+    /// * `want_video=false` → symmetric throttle on the video side
+    ///   (used when the main-thread video queue is at its soft cap).
+    ///
+    /// Ctl messages are always drained so Seek acks and EOF markers
+    /// reach the main thread immediately.
+    pub fn try_recv_subset(&self, want_audio: bool, want_video: bool) -> Option<DecodedUnit> {
+        if want_audio {
+            if let Some(rx) = self.audio_rx.as_ref() {
+                if let Ok(af) = rx.try_recv() {
+                    return Some(DecodedUnit::Audio(af));
+                }
             }
         }
         if let Some(rx) = self.ctl_rx.as_ref() {

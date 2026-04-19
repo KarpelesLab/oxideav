@@ -28,8 +28,10 @@ use crate::drivers::audio_convert::{resample_linear, to_f32_interleaved};
 use crate::drivers::engine::AudioEngine;
 
 pub struct SysAudioEngine {
-    /// Kept alive so the sysaudio callback keeps running.
-    _stream: sysaudio::Stream,
+    /// The underlying sysaudio stream. Kept alive so the callback
+    /// keeps running; we also drive it through `play()` / `pause()`
+    /// for the preroll gate.
+    stream: sysaudio::Stream,
 
     producer: ringbuf::HeapProd<f32>,
 
@@ -42,9 +44,19 @@ pub struct SysAudioEngine {
     samples_played: Arc<AtomicU64>,
     /// 0.0..=1.0 volume, bit-packed so we can load/store without a mutex.
     volume: Arc<AtomicU32>,
-    /// Mirror of the paused state so we don't call `pause/play`
-    /// repeatedly.
-    paused: bool,
+    /// User-requested pause state (Space in the player). Combined
+    /// with `preroll_done` to decide whether the stream should
+    /// actually be playing.
+    user_paused: bool,
+    /// Samples-per-channel we want buffered before we start playing
+    /// the first time. Smooths startup when the decoder barely
+    /// matches real-time (e.g. slow codec in debug builds, or a
+    /// modem-speed network input).
+    preroll_target: u64,
+    /// True once we've unpaused after hitting `preroll_target`.
+    /// Latches; after this `pause()` / `play()` pass through to the
+    /// stream unchanged.
+    preroll_done: bool,
     /// If the decoder's rate differed from the device rate, `queue`
     /// resamples with a dumb linear interpolator before pushing.
     resample_from: Option<u32>,
@@ -102,7 +114,7 @@ impl SysAudioEngine {
         let callback_ran_cb = callback_ran.clone();
         let ch_cb = channels as usize;
 
-        let stream = sysaudio::open(driver, req, move |out, _info| {
+        let mut stream = sysaudio::open(driver, req, move |out, _info| {
             callback_ran_cb.store(true, Ordering::Relaxed);
             let v = f32::from_bits(volume_cb.load(Ordering::Relaxed));
             let written = consumer.pop_slice(out);
@@ -114,21 +126,47 @@ impl SysAudioEngine {
         })
         .map_err(|e| Error::other(format!("sysaudio: open({}): {e}", driver.name())))?;
 
+        // Start paused so the callback writes silence (and
+        // `samples_played` doesn't advance) until `queue()` has
+        // primed the ring with ~1 s of audio. Without this the
+        // callback opens immediately on an empty ring and underruns
+        // on the first beat, which sounds like chopping or a stutter
+        // on any codec where decode-per-packet is close to the
+        // packet duration.
+        let _ = stream.pause();
+
         let fmt = stream.format();
         let resample_from = (fmt.sample_rate != sample_rate).then_some(sample_rate);
+        // 1 s preroll target — generous enough to smooth routine
+        // decoder jitter without feeling laggy.
+        let preroll_target = fmt.sample_rate as u64;
 
         Ok(Self {
-            _stream: stream,
+            stream,
             producer,
             device_rate: fmt.sample_rate,
             device_channels: fmt.channels,
             samples_played,
             volume,
-            paused: false,
+            user_paused: false,
+            preroll_target,
+            preroll_done: false,
             resample_from,
             backend_name: driver.name(),
             callback_ran,
         })
+    }
+
+    /// Decide whether the stream should be playing right now, given
+    /// the combination of `user_paused` + `preroll_done`. Called from
+    /// the state transitions below.
+    fn apply_play_state(&mut self) {
+        let should_play = self.preroll_done && !self.user_paused;
+        if should_play {
+            let _ = self.stream.play();
+        } else {
+            let _ = self.stream.pause();
+        }
     }
 }
 
@@ -156,7 +194,22 @@ impl AudioEngine for SysAudioEngine {
                 self.device_channels as usize,
             );
         }
+        // Push what fits. The player's back-pressure path
+        // (`audio_headroom_samples`) means we normally never come
+        // close to a full ring — so any partial-push here signals
+        // the back-pressure threshold is set too loose, not that we
+        // should silently drop. The caller owns that decision.
         let _ = self.producer.push_slice(&buf);
+
+        // First push that crosses the preroll threshold flips the
+        // stream into the playing state.
+        if !self.preroll_done
+            && self.producer.occupied_len() as u64
+                >= self.preroll_target * self.device_channels.max(1) as u64
+        {
+            self.preroll_done = true;
+            self.apply_play_state();
+        }
         Ok(())
     }
 
@@ -169,15 +222,11 @@ impl AudioEngine for SysAudioEngine {
     }
 
     fn set_paused(&mut self, paused: bool) {
-        if paused == self.paused {
+        if paused == self.user_paused {
             return;
         }
-        if paused {
-            let _ = self._stream.pause();
-        } else {
-            let _ = self._stream.play();
-        }
-        self.paused = paused;
+        self.user_paused = paused;
+        self.apply_play_state();
     }
 
     fn set_volume(&mut self, v: f32) {
@@ -189,8 +238,17 @@ impl AudioEngine for SysAudioEngine {
         (self.producer.occupied_len() / self.device_channels.max(1) as usize) as u64
     }
 
+    fn audio_headroom_samples(&self) -> u64 {
+        // The ringbuf stores f32 slots; divide by channels to report
+        // per-channel sample headroom, matching what the player
+        // thinks of as "samples". Once this hits ~0 the player stops
+        // pulling audio, the decoder channel fills, the decoder
+        // blocks, and the demuxer naturally back-pressures.
+        (self.producer.vacant_len() as u64) / self.device_channels.max(1) as u64
+    }
+
     fn latency(&self) -> Option<Duration> {
-        self._stream.latency()
+        self.stream.latency()
     }
 
     fn info(&self) -> String {

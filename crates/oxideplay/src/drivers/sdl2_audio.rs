@@ -179,6 +179,15 @@ impl AudioEngine for SdlAudioEngine {
         queued_bytes / bpf
     }
 
+    fn audio_headroom_samples(&self) -> u64 {
+        // SDL2's queue has no hard cap — it'll grow unbounded if we
+        // keep pushing. Impose a ~4s soft target so the player
+        // applies back-pressure the same way it does against
+        // oxideav-sysaudio.
+        let target = self.sample_rate as u64 * 4;
+        target.saturating_sub(self.audio_queue_len_samples())
+    }
+
     fn info(&self) -> String {
         // SDL2 reports "how much is queued"; we can derive an
         // estimate of latency at this instant but it's not a

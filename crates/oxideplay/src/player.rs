@@ -470,17 +470,36 @@ impl<D: OutputDriver> Player<D> {
     pub fn pump_once(&mut self) -> Result<bool> {
         let mut activity = false;
 
-        // Phase 1 — drain the worker's output channels. Audio is drained
-        // fully (SDL handles its own queue length; we just keep it fed).
-        // Video is drained only while the main-thread queue is under the
-        // soft cap — that's how we apply backpressure to the decoder so
-        // front-loaded content (e.g. non-interleaved AVI) doesn't race
-        // ahead of the audio clock and balloon memory.
+        // Phase 1 — drain the worker's output channels.
+        //
+        // Both streams are throttled with a "soft cap" check so the
+        // player stops pulling before the downstream would drop or
+        // balloon:
+        //
+        //  * Audio: `audio_headroom_samples()` — how many samples the
+        //    backend can still accept. Once the ringbuf / SDL queue
+        //    has less than ~250 ms of headroom left we stop pulling
+        //    audio, the decoder channel fills, the decoder blocks,
+        //    the packet channel fills, and finally the demuxer blocks
+        //    on audio routing. That's the natural backpressure chain
+        //    that keeps front-loaded containers (non-interleaved
+        //    AVI, MKV clusters with many audio blocks) from racing
+        //    ahead and making queue_audio silently drop samples.
+        //
+        //  * Video: `video_queue.len()` — same shape, main-thread
+        //    queue size instead of device headroom.
+        //
+        // Ctl messages always drain.
+        let audio_rate = self.output_sample_rate.max(1) as u64;
+        // ~250 ms of audio headroom kept as slack so brief decoder
+        // stalls don't cause underruns. Once the backend reports
+        // less than this free, we pause audio-pull.
+        let audio_headroom_floor = audio_rate / 4;
         loop {
-            // If the video queue is at the soft cap, pull only from the
-            // audio / ctl channels so we still service them.
             let want_video = self.video_queue.len() < VIDEO_QUEUE_SOFT_CAP;
-            let unit = self.worker.try_recv_subset(want_video);
+            let want_audio =
+                self.driver.audio_headroom_samples() > audio_headroom_floor;
+            let unit = self.worker.try_recv_subset(want_audio, want_video);
             let Some(unit) = unit else { break };
             activity = true;
             match unit {

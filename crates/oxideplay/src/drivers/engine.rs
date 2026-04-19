@@ -59,6 +59,16 @@ pub trait AudioEngine: Send {
     fn audio_queue_len_samples(&self) -> u64 {
         0
     }
+    /// How many samples (per channel) can still be queued before the
+    /// backend starts dropping. `u64::MAX` means "no soft cap" (engines
+    /// that block or grow on demand). The player consults this as its
+    /// audio-side back-pressure signal: if the headroom drops below a
+    /// threshold, it stops pulling new audio frames from the decode
+    /// worker and lets the downstream channels fill, which eventually
+    /// blocks the decoder and then the demuxer.
+    fn audio_headroom_samples(&self) -> u64 {
+        u64::MAX
+    }
     /// Output-side latency reported by the backend, if available.
     /// See `oxideav_sysaudio::Stream::latency` — over Bluetooth /
     /// network sinks this matters for A/V sync compensation.
@@ -169,6 +179,13 @@ impl OutputDriver for Composite {
             .as_ref()
             .map(|a| a.audio_queue_len_samples())
             .unwrap_or(0)
+    }
+
+    fn audio_headroom_samples(&self) -> u64 {
+        self.audio
+            .as_ref()
+            .map(|a| a.audio_headroom_samples())
+            .unwrap_or(u64::MAX)
     }
 
     fn engine_info(&self) -> (Option<String>, Option<String>) {
