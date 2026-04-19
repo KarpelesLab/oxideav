@@ -325,26 +325,38 @@ impl<D: OutputDriver> Player<D> {
         if self.eof {
             return Ok(false);
         }
-        // Read next packet.
-        let pkt = match self.demuxer.next_packet() {
-            Ok(p) => p,
-            Err(Error::Eof) => {
-                self.eof = true;
-                // Flush decoders to drain.
-                if let Some(d) = self.audio_decoder.as_mut() {
-                    let _ = d.flush();
-                    while let Ok(Frame::Audio(af)) = d.receive_frame() {
-                        let _ = self.driver.queue_audio(&af);
+        let audio_idx = self.audio_stream.as_ref().map(|s| s.index);
+        let video_idx = self.video_stream.as_ref().map(|s| s.index);
+        // Drain data/subtitle packets we don't route anywhere — they'd
+        // otherwise eat a whole tick each. Files that interleave many
+        // subtitle streams (15+ in the mewmew sample) would otherwise
+        // throttle video presentation to the ratio of interesting-to-
+        // total packets × tick rate, which can fall well below the
+        // target frame rate.
+        let pkt = loop {
+            let pkt = match self.demuxer.next_packet() {
+                Ok(p) => p,
+                Err(Error::Eof) => {
+                    self.eof = true;
+                    // Flush decoders to drain.
+                    if let Some(d) = self.audio_decoder.as_mut() {
+                        let _ = d.flush();
+                        while let Ok(Frame::Audio(af)) = d.receive_frame() {
+                            let _ = self.driver.queue_audio(&af);
+                        }
                     }
+                    return Ok(false);
                 }
-                return Ok(false);
+                Err(e) => return Err(e),
+            };
+            let idx = Some(pkt.stream_index);
+            if idx == audio_idx || idx == video_idx {
+                break pkt;
             }
-            Err(e) => return Err(e),
+            // Not a routed stream — discard and read the next packet.
         };
 
         // Route packet to the right decoder.
-        let audio_idx = self.audio_stream.as_ref().map(|s| s.index);
-        let video_idx = self.video_stream.as_ref().map(|s| s.index);
         if Some(pkt.stream_index) == audio_idx {
             if let Some(dec) = self.audio_decoder.as_mut() {
                 if let Err(e) = dec.send_packet(&pkt) {
