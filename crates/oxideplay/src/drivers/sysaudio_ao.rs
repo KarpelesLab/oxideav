@@ -49,6 +49,11 @@ pub struct SysAudioEngine {
     /// resamples with a dumb linear interpolator before pushing.
     resample_from: Option<u32>,
 
+    /// Name of the sysaudio backend we landed on (e.g. `"pulse"`,
+    /// `"alsa"`). Remembered so `info()` can tell the user which
+    /// driver ended up active after `auto`.
+    backend_name: &'static str,
+
     /// Diagnostic — latches true once the callback has run.
     #[allow(dead_code)]
     callback_ran: Arc<AtomicBool>,
@@ -121,8 +126,22 @@ impl SysAudioEngine {
             volume,
             paused: false,
             resample_from,
+            backend_name: driver.name(),
             callback_ran,
         })
+    }
+}
+
+/// Short description of how reliably a given sysaudio backend reports
+/// `Stream::latency()`. The copy here mirrors what `oxideav-sysaudio`
+/// implements (see its README).
+fn latency_quality(backend: &str) -> &'static str {
+    match backend {
+        "pulse" => "end-to-end (server-reported, catches BT + network)",
+        "alsa" => "driver-queue depth (partial — misses BT hops above ALSA)",
+        "wasapi" => "stream latency + padding (end-to-end, BT-aware)",
+        "coreaudio" => "software estimate — hardware/BT latency not included yet",
+        _ => "backend-specific",
     }
 }
 
@@ -172,5 +191,15 @@ impl AudioEngine for SysAudioEngine {
 
     fn latency(&self) -> Option<Duration> {
         self._stream.latency()
+    }
+
+    fn info(&self) -> String {
+        format!(
+            "sysaudio/{} @ {} Hz {}ch f32 — latency: {}",
+            self.backend_name,
+            self.device_rate,
+            self.device_channels,
+            latency_quality(self.backend_name)
+        )
     }
 }

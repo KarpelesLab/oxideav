@@ -178,4 +178,16 @@ impl AudioEngine for SdlAudioEngine {
         let bpf = self.bytes_per_frame.max(1) as u64;
         queued_bytes / bpf
     }
+
+    fn info(&self) -> String {
+        // SDL2 reports "how much is queued"; we can derive an
+        // estimate of latency at this instant but it's not a
+        // hardware property, just our own queue depth. Flag that
+        // clearly so users don't confuse it with e.g. PulseAudio's
+        // server-reported latency.
+        format!(
+            "sdl2 @ {} Hz {}ch f32 — latency: derived from SDL queue size (software-side only)",
+            self.sample_rate, self.output_channels
+        )
+    }
 }

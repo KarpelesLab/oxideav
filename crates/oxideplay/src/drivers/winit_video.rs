@@ -37,6 +37,10 @@ pub struct VideoRenderer {
     /// One-shot so we don't spam the log on every frame of e.g. an
     /// 8 K source on a 4 K-limit adapter.
     warned_downscale: bool,
+    /// One-line description of the wgpu adapter + backend + surface
+    /// format. Captured once at init so the startup banner can quote
+    /// it without stashing the whole `AdapterInfo`.
+    adapter_summary: String,
 }
 
 struct YuvTextures {
@@ -71,6 +75,21 @@ impl VideoRenderer {
             })
             .await
             .ok_or_else(|| Error::other("wgpu: no suitable adapter"))?;
+        let adapter_info = adapter.get_info();
+        let device_type = format!("{:?}", adapter_info.device_type).to_lowercase();
+        let backend = format!("{:?}", adapter_info.backend).to_lowercase();
+        // Cached summary for WinitVideoEngine::info(). Surface format
+        // is added below once we pick it.
+        let adapter_summary_base = format!(
+            "{} ({}, {})",
+            if adapter_info.name.is_empty() {
+                "<unnamed adapter>".to_string()
+            } else {
+                adapter_info.name.clone()
+            },
+            device_type,
+            backend
+        );
 
         // Use the adapter's native limits rather than the
         // `downlevel_defaults` preset — the latter caps max texture
@@ -238,6 +257,14 @@ impl VideoRenderer {
         // content dims.
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&[1.0_f32, 1.0, 0.0, 0.0]));
 
+        let adapter_summary = format!(
+            "gpu: {}  surface: {}x{} {:?}",
+            adapter_summary_base,
+            surface_cfg.width,
+            surface_cfg.height,
+            format
+        );
+
         Ok(Self {
             device,
             queue,
@@ -252,7 +279,14 @@ impl VideoRenderer {
             bind_group: None,
             uniform_buffer,
             warned_downscale: false,
+            adapter_summary,
         })
+    }
+
+    /// Human-readable summary of the GPU adapter + backend + initial
+    /// surface format. Frozen at init so resizes don't churn it.
+    pub fn adapter_summary(&self) -> &str {
+        &self.adapter_summary
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

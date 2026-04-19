@@ -462,6 +462,18 @@ fn run(cli: Cli) -> oxideav_core::Result<()> {
         );
     }
 
+    // Active video + audio engines — who's going to render this, and
+    // what do we know about them (GPU, latency reporting, etc.)?
+    let (vo_info, ao_info) = play.driver.engine_info();
+    match vo_info {
+        Some(s) => eprintln!("  vo: {s}"),
+        None => eprintln!("  vo: null (video disabled)"),
+    }
+    match ao_info {
+        Some(s) => eprintln!("  ao: {s}"),
+        None => eprintln!("  ao: null (audio disabled)"),
+    }
+
     let tty = tui::stdout_is_tty();
     let mut tui_guard: Option<tui::TuiGuard> = if tty {
         tui::TuiGuard::enter().ok()

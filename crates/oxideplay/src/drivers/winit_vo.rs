@@ -27,6 +27,9 @@ pub struct WinitVideoEngine {
     /// event loop to be pumped from the same thread that created it.
     event_loop: Option<EventLoop<()>>,
     app: WinitApp,
+    /// Requested content dimensions, remembered so `info()` can show
+    /// them even before `resumed()` has run and the renderer exists.
+    requested_dims: Option<(u32, u32)>,
 }
 
 struct WinitApp {
@@ -46,17 +49,27 @@ struct WinitApp {
 
 impl WinitVideoEngine {
     pub fn new(video_dims: Option<(u32, u32)>) -> Result<Self> {
-        let event_loop =
+        let mut event_loop =
             EventLoop::new().map_err(|e| Error::other(format!("winit: EventLoop::new: {e}")))?;
+        let mut app = WinitApp {
+            window: None,
+            video: None,
+            video_dims,
+            pending: Vec::new(),
+            quit: false,
+        };
+        // Prime the event loop once so `resumed()` fires and the
+        // window + wgpu renderer are actually constructed before we
+        // hand the engine back. Without this, `info()` would only
+        // know "winit is about to start"; the adapter/GPU summary
+        // wouldn't be available until the first `poll_events` tick.
+        // On X11/Wayland/Windows this fires Resumed on first pump;
+        // on macOS a Resumed event is scheduled by AppKit too.
+        let _ = event_loop.pump_app_events(Some(Duration::ZERO), &mut app);
         Ok(Self {
             event_loop: Some(event_loop),
-            app: WinitApp {
-                window: None,
-                video: None,
-                video_dims,
-                pending: Vec::new(),
-                quit: false,
-            },
+            app,
+            requested_dims: video_dims,
         })
     }
 }
@@ -263,5 +276,18 @@ impl VideoEngine for WinitVideoEngine {
             }
         }
         std::mem::take(&mut self.app.pending)
+    }
+
+    fn info(&self) -> String {
+        // If the resumed() pump in `new()` had a chance to fire, we
+        // know the real GPU adapter + surface; otherwise we fall
+        // back to the requested content dims.
+        match self.app.video.as_ref() {
+            Some(v) => format!("winit+wgpu  {}", v.adapter_summary()),
+            None => match self.requested_dims {
+                Some((w, h)) => format!("winit+wgpu  requested: {w}x{h} (renderer not up yet)"),
+                None => "winit+wgpu  (no dims, renderer not up yet)".into(),
+            },
+        }
     }
 }

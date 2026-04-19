@@ -36,6 +36,10 @@ pub struct SdlVideoEngine {
     window: *mut c_void,
     renderer: *mut c_void,
     texture: Option<TextureBundle>,
+    /// Initial window size — frozen at creation for `info()`; the
+    /// real surface size is queried lazily via
+    /// `SDL_GetRendererOutputSize` on each present.
+    initial_dims: (u32, u32),
 }
 
 // The raw pointers never leave this thread in the current player
@@ -80,6 +84,7 @@ impl SdlVideoEngine {
             window,
             renderer,
             texture: None,
+            initial_dims: (w, h),
         })
     }
 
@@ -213,6 +218,17 @@ impl VideoEngine for SdlVideoEngine {
             }
         }
         out
+    }
+
+    fn info(&self) -> String {
+        // SDL2 hides the renderer choice behind its own heuristic
+        // (SDL_GetRendererInfo would tell us "opengl" / "direct3d" /
+        // "software" / "metal" but the loader doesn't bind that
+        // entry point today). Keep the banner honest: just the
+        // backend name + initial window size; the actual output is
+        // always IYUV for our uploaded planes.
+        let (w, h) = self.initial_dims;
+        format!("sdl2  window: {w}x{h}  upload: IYUV (4:2:0)")
     }
 }
 

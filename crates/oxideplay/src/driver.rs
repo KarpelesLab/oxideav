@@ -65,6 +65,14 @@ pub trait OutputDriver {
     fn audio_queue_len_samples(&self) -> u64 {
         0
     }
+
+    /// Per-engine one-liner descriptions for the startup banner —
+    /// `(video, audio)`. `None` on either side means that engine is
+    /// disabled (e.g. `--vo null`). Default returns `(None, None)`;
+    /// `Composite` overrides to surface the real engines' `info()`.
+    fn engine_info(&self) -> (Option<String>, Option<String>) {
+        (None, None)
+    }
 }
 
 /// Blanket impl so `Box<dyn OutputDriver>` can stand in for a concrete
@@ -92,5 +100,8 @@ impl<D: OutputDriver + ?Sized> OutputDriver for Box<D> {
     }
     fn audio_queue_len_samples(&self) -> u64 {
         (**self).audio_queue_len_samples()
+    }
+    fn engine_info(&self) -> (Option<String>, Option<String>) {
+        (**self).engine_info()
     }
 }

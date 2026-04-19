@@ -33,6 +33,13 @@ pub trait VideoEngine: Send {
     /// The video path gets a chance to react to pause, e.g. by
     /// pausing a GPU render timer. Most just don't care.
     fn set_paused(&mut self, _paused: bool) {}
+    /// One-line human-readable description — driver name, GPU / render
+    /// backend, initial surface size, pixel format, etc. Printed by
+    /// `oxideplay` at startup so users can confirm they got the
+    /// backend they expected.
+    fn info(&self) -> String {
+        "unknown".into()
+    }
 }
 
 /// Audio output + master-clock owner. Implementations: `SdlAudioEngine`,
@@ -58,6 +65,13 @@ pub trait AudioEngine: Send {
     #[allow(dead_code)] // consumed once A/V-sync compensation lands in the sync layer
     fn latency(&self) -> Option<Duration> {
         None
+    }
+    /// One-line human-readable description — driver name, device
+    /// sample rate / channels / format, and a note on how the
+    /// backend measures `latency()` (end-to-end vs. driver-queue vs.
+    /// software-estimate). Printed by `oxideplay` at startup.
+    fn info(&self) -> String {
+        "unknown".into()
     }
 }
 
@@ -87,6 +101,7 @@ impl Composite {
             wall_accum: Duration::ZERO,
         }
     }
+
 }
 
 impl OutputDriver for Composite {
@@ -154,6 +169,13 @@ impl OutputDriver for Composite {
             .as_ref()
             .map(|a| a.audio_queue_len_samples())
             .unwrap_or(0)
+    }
+
+    fn engine_info(&self) -> (Option<String>, Option<String>) {
+        (
+            self.video.as_ref().map(|v| v.info()),
+            self.audio.as_ref().map(|a| a.info()),
+        )
     }
 }
 
