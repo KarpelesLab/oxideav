@@ -21,6 +21,13 @@ use crate::driver::{OutputDriver, PlayerEvent, SeekDir};
 /// the main-thread queue so memory stays flat.
 const VIDEO_QUEUE_MAX_AHEAD: Duration = Duration::from_secs(4);
 
+/// How stale a decoded video frame can get before we skip it rather
+/// than present it. Post-decode drop: the decoder still sees every
+/// packet (so the reference-frame chain stays intact), we just
+/// don't pay the SDL render cost for a frame that's already too late
+/// to land on screen at its proper pts.
+const VIDEO_FRAME_MAX_BEHIND: Duration = Duration::from_millis(100);
+
 /// All the state the play loop needs.
 pub struct Player<D: OutputDriver> {
     pub driver: D,
@@ -464,17 +471,20 @@ impl<D: OutputDriver> Player<D> {
             return Ok(activity);
         }
 
-        // Phase 2 — present at most ONE video frame per tick whose pts
-        // has reached the wallclock. SDL's present path can take
-        // 5-20 ms per call (YUV upload + renderer present); presenting
-        // several in a row would block this thread for >100 ms, during
-        // which the worker's bounded output channel fills, the audio
-        // decoder blocks on send, and SDL underruns its audio queue.
+        // Phase 2 — trim stale frames (post-decode drop) then present
+        // at most ONE video frame per tick whose pts has reached the
+        // wallclock. SDL's present path can take 5-20 ms per call
+        // (YUV upload + renderer present); presenting several in a
+        // row would block this thread for >100 ms, during which the
+        // worker's bounded output channel fills, the audio decoder
+        // blocks on send, and SDL underruns its audio queue.
         //
-        // If the decoder has produced a lot of future frames (e.g.
-        // after preroll) the extras sit in `video_queue` and come out
-        // one per tick. Stale frames are trimmed by `trim_video_queue`
-        // when new ones arrive.
+        // If the decoder has produced a lot of future frames the
+        // extras sit in `video_queue` and come out one per tick.
+        // Anything more than `VIDEO_FRAME_MAX_BEHIND` behind master is
+        // dropped by `trim_video_queue` without paying the render
+        // cost.
+        self.trim_video_queue();
         let now = self.position();
         let video_tb = self.video_stream.as_ref().map(|s| s.time_base);
         let epsilon = Duration::from_millis(50);
@@ -503,21 +513,24 @@ impl<D: OutputDriver> Player<D> {
     /// balloon memory. Drops frames whose pts is so far past the
     /// current wallclock that we've clearly fallen behind — the next
     /// frame still on the queue becomes the new presentation target.
+    /// Prune the video queue in both directions:
+    ///
+    /// * **Front** — drop frames that are `VIDEO_FRAME_MAX_BEHIND` or
+    ///   more stale vs. the master clock. This is the post-decode
+    ///   skip: the decoder already saw the packet, we just skip the
+    ///   render work because the frame would land visibly late.
+    /// * **Back** — drop frames that are `VIDEO_QUEUE_MAX_AHEAD` or
+    ///   more in the future. Only reached after a seek where the
+    ///   decoder raced ahead of the new clock origin.
     fn trim_video_queue(&mut self) {
         let Some(tb) = self.video_stream.as_ref().map(|s| s.time_base) else {
             return;
         };
         let now = self.position();
-        // Drop from the FRONT anything more than `VIDEO_QUEUE_MAX_AHEAD`
-        // BEHIND wallclock (stale), and from the BACK anything more
-        // than `VIDEO_QUEUE_MAX_AHEAD` AHEAD of wallclock (we queued
-        // too much future). The second case is the real safety net; the
-        // first trims after a pause/seek where decode raced ahead.
-        let max_behind = Duration::from_secs(1);
         while let Some(front) = self.video_queue.front() {
             let pts_secs = front.pts.map(|p| tb.seconds_of(p)).unwrap_or(0.0);
             let target = Duration::from_secs_f64(pts_secs.max(0.0));
-            if target + max_behind < now {
+            if target + VIDEO_FRAME_MAX_BEHIND < now {
                 self.video_queue.pop_front();
             } else {
                 break;

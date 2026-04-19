@@ -210,27 +210,10 @@ fn run_loop<D: OutputDriver>(
             break;
         }
 
-        // Drain the decode worker on every tick. Back-pressure already
-        // lives in the worker's bounded output channel — gating the
-        // drain by the audio-queue depth here would starve the channel
-        // and stall the audio decoder, which in turn starves SDL and
-        // causes choppy playback.
+        // Drain the decode worker on every tick. Audio is queued to
+        // SDL as fast as the worker produces it; the bounded per-
+        // stream channels inside the worker provide back-pressure.
         let _ = play.pump_once()?;
-
-        // Pre-roll gate: keep the audio device paused until enough
-        // samples are buffered (0.25 s at the stream's sample rate).
-        // This avoids the "first samples glitch" where SDL starts
-        // draining the queue before demux + decode have produced
-        // anything. Keep this value below what MP2/AAC typical
-        // frame sizes pile up to in <10 packets so the check triggers
-        // reliably.
-        let preroll_samples = media
-            .audio
-            .as_ref()
-            .and_then(|a| a.params.sample_rate)
-            .unwrap_or(48_000) as u64
-            / 4;
-        let _ = play.driver.try_start_audio(preroll_samples);
 
         if play.eof_reached() && play.audio_drained() && !play.paused() {
             break;

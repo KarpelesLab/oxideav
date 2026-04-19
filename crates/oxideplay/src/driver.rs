@@ -65,17 +65,4 @@ pub trait OutputDriver {
     fn audio_queue_len_samples(&self) -> u64 {
         0
     }
-
-    /// Pre-roll gate: the driver starts with its audio output paused
-    /// (so SDL doesn't begin draining an empty queue the instant the
-    /// device opens). The player calls this on every tick; the first
-    /// call where the buffered-sample count is ≥ `min_samples` flips
-    /// the device into playing state. Subsequent calls are no-ops
-    /// (returns `true`).
-    ///
-    /// Default implementation: immediately "prerolled" — headless /
-    /// dummy drivers don't need a pre-roll step.
-    fn try_start_audio(&mut self, _min_samples: u64) -> bool {
-        true
-    }
 }

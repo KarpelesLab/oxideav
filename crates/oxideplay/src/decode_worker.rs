@@ -28,7 +28,7 @@
 //! dropped which unblocks any pending receives.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -65,17 +65,21 @@ pub enum DecodedUnit {
     Ctl(DecodedCtl),
 }
 
-/// Per-stream decoded-channel depths. Audio is sized generously (up to
-/// a few seconds of buffer) so a main-thread stall can't starve SDL.
-/// Video is smaller because each frame is large and main caps at one
-/// present per tick anyway.
-const AUDIO_OUT_CAP: usize = 128;
-const VIDEO_OUT_CAP: usize = 8;
+/// Per-stream decoded-channel depths. Audio is sized generously (~4.7 s
+/// of buffer) so a multi-second main-thread stall can't starve SDL.
+/// Video is a "smoothing buffer" — large enough to absorb a burst of
+/// decoded frames from an I-VOP but not so large that stale frames
+/// would accumulate if the main thread is slow to trim.
+const AUDIO_OUT_CAP: usize = 200;
+const VIDEO_OUT_CAP: usize = 24;
 const CTL_CAP: usize = 16;
 
-/// Packet-channel depth per decode stage.
-const AUDIO_PKT_CAP: usize = 32;
-const VIDEO_PKT_CAP: usize = 16;
+/// Packet-channel depths. Both sized to absorb the `BufferedSource`
+/// prefetch burst at startup (demux can read many packets from
+/// memory before either decoder has spun up) without the demux
+/// thread blocking and starving the OTHER stream's routing.
+const AUDIO_PKT_CAP: usize = 64;
+const VIDEO_PKT_CAP: usize = 64;
 
 /// Handle to the pipeline. Drops cleanly.
 pub struct DecodeWorker {
@@ -319,27 +323,21 @@ impl DemuxCtx {
             match self.demuxer.next_packet() {
                 Ok(p) => {
                     let idx = Some(p.stream_index);
-                    if idx == self.audio_idx {
-                        // Audio is the critical path — block until the
-                        // audio decoder's queue has room. If we dropped
-                        // audio here SDL would underrun.
-                        if self.audio_pkt_tx.send(PktMsg::Pkt(p)).is_err() {
-                            return;
-                        }
+                    let tx = if idx == self.audio_idx {
+                        Some(&self.audio_pkt_tx)
                     } else if idx == self.video_idx {
-                        // Video is discardable — if the video decoder
-                        // can't keep up, DROP the packet rather than
-                        // block the demux thread. Blocking here would
-                        // stop us from ever reading the next audio
-                        // packet either (head-of-line blocking), which
-                        // is far worse than a dropped video frame.
-                        match self.video_pkt_tx.try_send(PktMsg::Pkt(p)) {
-                            Ok(()) => {}
-                            Err(TrySendError::Full(_)) => {
-                                // drop silently; video decoder catches
-                                // up on the next I-VOP.
-                            }
-                            Err(TrySendError::Disconnected(_)) => return,
+                        Some(&self.video_pkt_tx)
+                    } else {
+                        None
+                    };
+                    if let Some(tx) = tx {
+                        // Blocking send: corrupting the decoder state
+                        // by dropping packets pre-decode would be far
+                        // worse than a brief demux stall. The channel
+                        // caps are sized to absorb the startup burst
+                        // and typical decoder jitter.
+                        if tx.send(PktMsg::Pkt(p)).is_err() {
+                            return;
                         }
                     }
                     // else: subtitle / data / unknown — discard.

@@ -81,13 +81,8 @@ struct AudioState {
     bytes_per_frame: u32,
     /// Current playback volume (0.0..=1.0).
     volume: f32,
-    /// User-requested pause state.
-    user_paused: bool,
-    /// True once the device has been un-paused at least once (i.e.
-    /// playback has started). While `false`, the device is kept
-    /// paused until the main loop has buffered enough audio via
-    /// [`Sdl2Driver::try_start_audio`].
-    prerolled: bool,
+    /// User-requested pause state. Tracks SDL_PauseAudioDevice.
+    paused: bool,
 }
 
 impl Drop for AudioState {
@@ -186,12 +181,14 @@ impl Sdl2Driver {
                 lib.last_error()
             )));
         }
-        // Keep the device PAUSED until the main loop has buffered
-        // enough audio. The first SDL_QueueAudio arrives only after
-        // demux + decode have run for some time; if we start the
-        // device immediately, it'll underrun before we can feed it.
-        // `try_start_audio` transitions to playing once the queue
-        // crosses the pre-roll threshold.
+        // Start the audio device playing immediately. Before the first
+        // `SDL_QueueAudio` call the device outputs silence; once the
+        // main thread feeds it samples (typically within 5-50 ms of
+        // startup) playback takes over. A preroll gate would delay
+        // the visible start without actually helping: the main loop's
+        // per-tick drain already keeps SDL's queue topped up.
+        // SAFETY: dev is valid.
+        unsafe { (lib.SDL_PauseAudioDevice)(dev, 0) };
         let audio = AudioState {
             lib: lib.clone(),
             dev,
@@ -199,8 +196,7 @@ impl Sdl2Driver {
             total_queued_bytes: 0,
             bytes_per_frame,
             volume: 1.0,
-            user_paused: false,
-            prerolled: false,
+            paused: false,
         };
 
         let video = match video {
@@ -656,40 +652,14 @@ impl OutputDriver for Sdl2Driver {
     }
 
     fn set_paused(&mut self, paused: bool) {
-        if self.audio.user_paused == paused {
+        if self.audio.paused == paused {
             return;
         }
-        self.audio.user_paused = paused;
-        // While not prerolled, the device stays paused regardless — it
-        // will be resumed by `try_start_audio` once the buffer is deep
-        // enough. Once prerolled, user pause/resume directly controls
-        // the SDL device.
-        if self.audio.prerolled {
-            // SAFETY: dev is valid.
-            unsafe {
-                (self.lib.SDL_PauseAudioDevice)(self.audio.dev, if paused { 1 } else { 0 });
-            }
-        }
-    }
-
-    fn try_start_audio(&mut self, min_samples: u64) -> bool {
-        if self.audio.prerolled {
-            return true;
-        }
+        self.audio.paused = paused;
         // SAFETY: dev is valid.
-        let queued_bytes = unsafe { (self.lib.SDL_GetQueuedAudioSize)(self.audio.dev) } as u64;
-        let bpf = self.audio.bytes_per_frame.max(1) as u64;
-        let queued_samples = queued_bytes / bpf;
-        if queued_samples < min_samples {
-            return false;
+        unsafe {
+            (self.lib.SDL_PauseAudioDevice)(self.audio.dev, if paused { 1 } else { 0 });
         }
-        // Unpause unless the user already hit pause during preroll.
-        if !self.audio.user_paused {
-            // SAFETY: dev is valid.
-            unsafe { (self.lib.SDL_PauseAudioDevice)(self.audio.dev, 0) };
-        }
-        self.audio.prerolled = true;
-        true
     }
 
     fn set_volume(&mut self, vol: f32) {
