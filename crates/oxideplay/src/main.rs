@@ -217,6 +217,19 @@ fn run_loop<D: OutputDriver>(
         // causes choppy playback.
         let _ = play.pump_once()?;
 
+        // Pre-roll gate: keep the audio device paused until enough
+        // samples are buffered (0.5 s at the stream's sample rate).
+        // This avoids the "first samples glitch" where SDL starts
+        // draining the queue before demux + decode have produced
+        // anything.
+        let preroll_samples = media
+            .audio
+            .as_ref()
+            .and_then(|a| a.params.sample_rate)
+            .unwrap_or(48_000) as u64
+            / 2;
+        let _ = play.driver.try_start_audio(preroll_samples);
+
         if play.eof_reached() && play.audio_drained() && !play.paused() {
             break;
         }
