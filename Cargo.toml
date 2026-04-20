@@ -45,7 +45,7 @@ oxideav-h265 = { path = "crates/oxideav-h265", version = "0.0" }
 oxideav-h264 = { path = "crates/oxideav-h264", version = "0.0" }
 oxideav-av1 = { path = "crates/oxideav-av1", version = "0.1" }
 oxideav-h263 = { path = "crates/oxideav-h263", version = "0.0" }
-oxideav-vp8 = { path = "crates/oxideav-vp8", version = "0.0" }
+oxideav-vp8 = { path = "crates/oxideav-vp8", version = "0.1" }
 oxideav-audio-filter = { path = "crates/oxideav-audio-filter", version = "0.0" }
 oxideav-pixfmt = { path = "crates/oxideav-pixfmt", version = "0.1" }
 oxideav-mpeg4video = { path = "crates/oxideav-mpeg4video", version = "0.1" }
@@ -59,7 +59,7 @@ oxideav-mp2 = { path = "crates/oxideav-mp2", version = "0.0" }
 oxideav-mp3 = { path = "crates/oxideav-mp3", version = "0.0" }
 oxideav-id3 = { path = "crates/oxideav-id3", version = "0.0" }
 oxideav-aac = { path = "crates/oxideav-aac", version = "0.0" }
-oxideav-celt = { path = "crates/oxideav-celt", version = "0.0" }
+oxideav-celt = { path = "crates/oxideav-celt", version = "0.1" }
 oxideav-g7231 = { path = "crates/oxideav-g7231", version = "0.0" }
 oxideav-g728 = { path = "crates/oxideav-g728", version = "0.0" }
 oxideav-g729 = { path = "crates/oxideav-g729", version = "0.0" }
